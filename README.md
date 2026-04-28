@@ -117,12 +117,25 @@ os.makedirs('/content/drive/MyDrive/tinystories_checkpoints', exist_ok=True)
 os.environ['GDRIVE_PATH'] = '/content/drive/MyDrive/tinystories_checkpoints'
 ```
 
-### Cell 3: Clone the Repository
+### Cell 3: Clone or Update the Repository
 
 ```python
-!git clone https://github.com/abhishekadile/CSCI_642.git
-%cd CSCI_642
+import os, subprocess
+
+REPO_URL = "https://github.com/abhishekadile/CSCI_642.git"
+REPO_DIR = "/content/CSCI_642"
+
+if os.path.isdir(os.path.join(REPO_DIR, ".git")):
+    os.chdir(REPO_DIR)
+    subprocess.run(["git", "pull", "origin", "main"], check=True)
+else:
+    subprocess.run(["git", "clone", REPO_URL, REPO_DIR], check=True)
+    os.chdir(REPO_DIR)
+
+print(f"Working directory: {os.getcwd()}")
 ```
+
+If your Colab runtime is already inside `/content/CSCI_642`, run this same cell to update the code. Do not run `git clone` from inside the repo, because that creates a nested `/content/CSCI_642/CSCI_642` folder.
 
 ### Cell 4: Install Dependencies
 
@@ -177,7 +190,7 @@ plt.tight_layout(); plt.show()
 
 ### Cell 8: Resume Training (if Colab disconnected)
 
-If your session dropped, reconnect, re-run Cells 1–5, then:
+If your session dropped, reconnect, re-run Cells 1–5. Cell 3 will pull the latest code if `/content/CSCI_642` already exists. Then run:
 
 ```python
 !python scripts/train.py \
