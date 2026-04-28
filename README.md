@@ -2,7 +2,7 @@
 ### CSCI 642 — Natural Language Processing — Spring 2026 — Group 1
 **Naomie Bambara · Abhishek Adile · Abdellah Afellah**
 
-A decoder-only GPT-style Transformer (1–10M parameters) trained on the TinyStories dataset with mixed precision training (AMP), KV caching, and full GPU optimization. Supports training on Google Colab T4 and local inference on Windows with an RTX 2080 (CUDA).
+A decoder-only GPT-style Transformer trained on the TinyStories dataset with GPT-2 BPE tokenization, mixed precision training (AMP), KV caching, and GPU optimization. Supports training on Google Colab T4 and local inference on Windows with an RTX 2080 (CUDA).
 
 ---
 
@@ -10,7 +10,7 @@ A decoder-only GPT-style Transformer (1–10M parameters) trained on the TinySto
 
 1. [Project Overview](#1-project-overview)
 2. [Quickstart: Local Setup](#2-quickstart-local-setup)
-3. [Push to GitHub](#3-push-to-github)
+3. [GitHub Repository](#3-github-repository)
 4. [Train on Google Colab (Full Walkthrough)](#4-train-on-google-colab-full-walkthrough)
 5. [Chat with the Model on Colab](#5-chat-with-the-model-on-colab)
 6. [Chat from Your Windows Terminal (RTX 2080)](#6-chat-from-your-windows-terminal-rtx-2080)
@@ -26,7 +26,7 @@ A decoder-only GPT-style Transformer (1–10M parameters) trained on the TinySto
 
 This project trains a compact GPT-style Transformer on TinyStories and investigates how sliding window KV cache sizes affect inference latency, GPU memory, and generation quality. The two research questions are:
 
-**RQ1:** How do KV cache window sizes (64, 128, 256, full) affect latency, memory, and story quality in a sub-10M parameter model?
+**RQ1:** How do KV cache window sizes (64, 128, 256, full) affect latency, memory, and story quality in a compact decoder-only model?
 
 **RQ2:** Does KV cache reuse efficiency (cache hit rate) correlate with lower continuation perplexity on story completion tasks?
 
@@ -38,8 +38,8 @@ This project trains a compact GPT-style Transformer on TinyStories and investiga
 
 ```bash
 # Clone the repo
-git clone https://github.com/<YOUR_USERNAME>/tinystories-transformer.git
-cd tinystories-transformer
+git clone https://github.com/abhishekadile/CSCI_642.git
+cd CSCI_642
 
 # Create a virtual environment
 python -m venv venv
@@ -68,28 +68,24 @@ python -c "import torch; print(torch.cuda.get_device_name(0))"
 python scripts/train.py --time_limit 300 --device cuda
 ```
 
-This trains for 5 minutes and saves a checkpoint to `checkpoints/`. Good for verifying the setup before pushing to GitHub.
+This trains for 5 minutes and saves a checkpoint to `checkpoints/`. Good for verifying the setup before a full training run.
 
 ---
 
-## 3. Push to GitHub
+## 3. GitHub Repository
 
 ```bash
-# Initialize the repo (if you haven't already)
-git init
-git add .
-git commit -m "Initial scaffold: decoder-only transformer with KV cache and GPU optimization"
+# Clone the published project
+git clone https://github.com/abhishekadile/CSCI_642.git
+cd CSCI_642
 
-# Create a new repo on GitHub (via the web UI or GitHub CLI)
-gh repo create tinystories-transformer --public
-
-# Add remote and push
-git remote add origin https://github.com/<YOUR_USERNAME>/tinystories-transformer.git
-git branch -M main
-git push -u origin main
+# Pull the latest changes later
+git pull origin main
 ```
 
-Checkpoints, preprocessed tensors, and wandb logs are excluded from git via `.gitignore`.
+Repository URL: https://github.com/abhishekadile/CSCI_642.git
+
+Checkpoints, preprocessed tensors, results, tokenizer metadata, and wandb logs are excluded from git via `.gitignore`.
 
 ---
 
@@ -124,8 +120,8 @@ os.environ['GDRIVE_PATH'] = '/content/drive/MyDrive/tinystories_checkpoints'
 ### Cell 3: Clone the Repository
 
 ```python
-!git clone https://github.com/<YOUR_USERNAME>/tinystories-transformer.git
-%cd tinystories-transformer
+!git clone https://github.com/abhishekadile/CSCI_642.git
+%cd CSCI_642
 ```
 
 ### Cell 4: Install Dependencies
@@ -191,7 +187,7 @@ If your session dropped, reconnect, re-run Cells 1–5, then:
   --device cuda
 ```
 
-Training resumes from where it left off. The remaining time budget is recalculated from the saved step count.
+Training resumes from the saved model, optimizer, and AMP scaler state, then runs for the requested wall-clock time.
 
 ---
 
@@ -203,16 +199,18 @@ After training, add a new cell:
 
 ```python
 from inference.chat import ChatSession
-from model.transformer import GPTTransformer
+from model.transformer import GPTModel
+from data.tokenizer import TinyStoriesTokenizer
 import torch, yaml
 
 config = yaml.safe_load(open('configs/default.yaml'))
-model = GPTTransformer(config['model'])
+tokenizer = TinyStoriesTokenizer()
+model = GPTModel(config['model'])
 ckpt = torch.load('checkpoints/best.pt', map_location='cuda')
 model.load_state_dict(ckpt['model_state_dict'])
 model = model.cuda().eval()
 
-session = ChatSession(model, device='cuda')
+session = ChatSession(model, tokenizer, device='cuda')
 
 # Chat loop — run this cell repeatedly
 user_input = input("You: ")
@@ -220,9 +218,9 @@ response = session.chat(user_input)
 print(f"Model: {response}")
 ```
 
-### Option B: `chat_colab.ipynb` with ipywidgets UI
+### Option B: `chat_colab.ipynb`
 
-Open `notebooks/chat_colab.ipynb`. This notebook provides a text box and output area so you can chat without running terminal commands. Load best checkpoint in Cell 1, then interact in Cell 2.
+Open `notebooks/chat_colab.ipynb`. It installs dependencies, loads `checkpoints/best.pt`, creates a `ChatSession`, and prompts for a single chat turn inside the notebook.
 
 ---
 
@@ -241,10 +239,8 @@ python scripts/chat_terminal.py --checkpoint checkpoints/best.pt --device cuda
 You will see:
 
 ```
-Loaded model from checkpoints/best.pt
-Device: NVIDIA GeForce RTX 2080 (7.9 GB VRAM)
-KV cache mode: full
-Type 'quit' to exit | 'reset' to clear history | 'save <filename>' to save conversation
+Using device: NVIDIA GeForce RTX 2080 (8.6 GB)
+Chat started. Commands: 'quit' | 'reset' | 'save <filename>'
 
 You: Tell me a story about a robot who learns to bake bread.
 Model: Once upon a time, there was a small robot named Benny who lived in a cozy kitchen...
@@ -253,7 +249,7 @@ You: What happens next?
 Model: Benny carefully measured the flour, but he had never felt soft dough before...
 
 You: save conversation.txt
-Conversation saved to conversation.txt.
+[Saved to conversation.txt]
 
 You: quit
 Goodbye.
@@ -276,7 +272,7 @@ Two checkpoints are maintained at all times:
 | `checkpoints/best.pt` | Every time validation loss improves | model weights with lowest observed val loss |
 | `checkpoints/latest.pt` | Every 500 steps and at training end | most recent weights for resuming |
 
-Each checkpoint file contains: `model_state_dict`, `optimizer_state_dict`, `scaler_state_dict` (for AMP), `step`, `val_loss`, `config`.
+Each checkpoint file contains: `model_state_dict`, `optimizer_state_dict`, `scaler_state_dict` (for AMP), `step`, `val_loss`, `config`, and `timestamp`.
 
 If `GDRIVE_PATH` is set, both checkpoints are copied to Google Drive after each save. This protects against Colab disconnection.
 
@@ -313,23 +309,22 @@ Results are saved to `results/rq1_results.csv` and `results/rq2_results.csv`.
 **RQ1 output example:**
 
 ```
-KV Mode       | Window | Latency (ms/tok) | Peak GPU Mem (MB) | Stories eval'd
---------------|--------|------------------|-------------------|--------------
-none          | —      | 18.4             | 1024              | 50
-full          | —      | 6.2              | 3840              | 50
-sliding_window| 256    | 6.8              | 2048              | 50
-sliding_window| 128    | 7.1              | 1280              | 50
-sliding_window| 64     | 7.4              | 896               | 50
+mode,window_size,latency_ms_per_token,peak_gpu_memory_mb,cache_hit_rate,gpt4_eval_skipped
+none,0,18.4,1024,0.0,True
+full,0,6.2,3840,0.94,True
+sliding_window,64,7.4,896,0.94,True
+sliding_window,128,7.1,1280,0.94,True
+sliding_window,256,6.8,2048,0.94,True
 ```
 
 **RQ2 output example:**
 
 ```
-RQ2: Cache Hit Rate vs Continuation Perplexity
-Global Pearson r = -0.42 (p < 0.001)
-Short stories (<100 tokens): r = -0.31
-Medium stories (100–250 tokens): r = -0.45
-Long stories (>250 tokens): r = -0.51
+length_bin,n,pearson_r,p_value
+all,500,-0.4200,0.0008
+short,110,-0.3100,0.014
+medium,260,-0.4500,0.0002
+long,130,-0.5100,0.0001
 ```
 
 ---
@@ -362,13 +357,14 @@ inference:
 ## 11. Repository Map
 
 ```
-tinystories-transformer/
+CSCI_642/
 │
 ├── .cursorrules          ← Cursor codebase map and vibe-coding rules
 ├── configs/default.yaml  ← All hyperparameters (single source of truth)
 │
 ├── data/
-│   ├── dataset.py        ← TinyStories HuggingFace loader, GPT-2 tokenizer, chunking
+│   ├── tokenizer.py      ← TinyStoriesTokenizer wrapper around GPT-2 BPE
+│   ├── dataset.py        ← Memory-mapped binary token dataset
 │   └── preprocess.py     ← Offline preprocessing → binary tensor cache
 │
 ├── model/
@@ -391,7 +387,7 @@ tinystories-transformer/
 │
 ├── notebooks/
 │   ├── train_colab.ipynb ← Full Colab training walkthrough (this README in notebook form)
-│   └── chat_colab.ipynb  ← Inference-only Colab chat with ipywidgets UI
+│   └── chat_colab.ipynb  ← Inference-only Colab chat notebook
 │
 ├── scripts/
 │   ├── train.py             ← CLI training entry point
@@ -399,7 +395,7 @@ tinystories-transformer/
 │   └── run_experiments.py   ← RQ1 + RQ2 experiment runner
 │
 └── utils/
-    ├── logging_utils.py  ← Wandb-optional logger
+    ├── logging_utils.py  ← Console logging and CSV append helpers
     └── seed.py           ← Global reproducibility seed setter
 ```
 
