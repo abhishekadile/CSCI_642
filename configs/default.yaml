@@ -10,7 +10,7 @@ model:
   weight_tying: true
 
 training:
-  batch_size: 32
+  batch_size: 30
   grad_accumulation_steps: 4
   learning_rate: 3.0e-4
   warmup_steps: 500
@@ -22,7 +22,7 @@ training:
   seed: 42
 
 gpu:
-  auto_tune_batch_size: true
+  auto_tune_batch_size: false
   empty_cache_every_n_steps: 100
   memory_log_every_n_steps: 200
   use_torch_compile: true
@@ -30,7 +30,7 @@ gpu:
 data:
   dataset_name: "roneneldan/TinyStories"
   chunk_size: 256
-  num_workers: 4
+  num_workers: 2
   tokenizer_cache_dir: "data/tokenizer"
   tensor_cache_dir: "data/cache"
   val_continuation_n_stories: 500

@@ -291,7 +291,7 @@ The following optimizations are applied automatically at training start:
 | Pinned memory DataLoader | `pin_memory=True`, `prefetch_factor=2` | Faster host-to-device transfers |
 | `torch.compile` | JIT-compiles the model graph (PyTorch 2.x) | 10–30% speedup where supported |
 | Gradient accumulation | Accumulates gradients over 4 steps | Effective batch size 4x without extra VRAM |
-| BatchSizeAutoTuner | Binary search for max batch size at startup | Maximizes GPU occupancy automatically |
+| BatchSizeAutoTuner | Optional binary search for max batch size | Disabled by default after Colab selected batch size 30 |
 | Cache flushing | `torch.cuda.empty_cache()` every 100 steps | Prevents memory fragmentation |
 
 ---
@@ -343,9 +343,16 @@ model:
   max_seq_len: 256    # Training and inference context length
 
 training:
+  batch_size: 30                 # Locked after Colab auto-tuning
   time_limit_seconds: 3600   # Wall-clock training budget (1 hour)
   val_every_steps: 500        # How often to compute validation perplexity
   grad_accumulation_steps: 4  # Effective batch = batch_size * grad_accumulation_steps
+
+gpu:
+  auto_tune_batch_size: false # Batch size is fixed at the tuned Colab value
+
+data:
+  num_workers: 2              # Colab-safe DataLoader worker count
 
 inference:
   default_kv_mode: "full"     # full | sliding_window | none
