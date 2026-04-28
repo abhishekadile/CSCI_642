@@ -1,0 +1,1700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Efficient Transformer Training on TinyStories</title>
+  <style>
+    :root {
+      --bg: #071014;
+      --panel: rgba(255,255,255,.055);
+      --panel-strong: rgba(255,255,255,.1);
+      --line: rgba(255,255,255,.16);
+      --text: #f4f7f7;
+      --muted: #a7b5b8;
+      --soft: #6e8186;
+      --cyan: #31d4e8;
+      --green: #54d28c;
+      --gold: #f5b84b;
+      --coral: #ff7f6e;
+      --violet: #aa8cff;
+      --shadow: 0 24px 60px rgba(0,0,0,.36);
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    body {
+      color: var(--text);
+      background:
+        radial-gradient(circle at 20% 0%, rgba(49,212,232,.16), transparent 34%),
+        radial-gradient(circle at 88% 12%, rgba(245,184,75,.12), transparent 28%),
+        linear-gradient(135deg, #071014 0%, #10151c 52%, #080b10 100%);
+    }
+
+    button { font: inherit; color: inherit; }
+    .deck { height: 100vh; display: grid; grid-template-rows: 1fr auto; }
+    .slides { position: relative; min-height: 0; }
+    .slide {
+      position: absolute;
+      inset: 0;
+      padding: clamp(24px, 4vw, 56px);
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 22px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(32px) scale(.985);
+      transition: opacity .28s ease, transform .28s ease;
+    }
+    .slide.active {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(0) scale(1);
+    }
+
+    .slide-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 16px;
+    }
+    .kicker {
+      margin: 0 0 8px;
+      color: var(--cyan);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 { margin: 0; letter-spacing: 0; }
+    h1 { font-size: clamp(42px, 7vw, 86px); line-height: .95; max-width: 980px; }
+    h2 { font-size: clamp(30px, 4vw, 54px); line-height: 1; }
+    h3 { font-size: clamp(18px, 2vw, 25px); }
+    p { margin: 0; color: var(--muted); font-size: clamp(16px, 1.4vw, 20px); line-height: 1.45; }
+    .slide-no { color: var(--soft); font-weight: 800; font-size: 15px; white-space: nowrap; }
+
+    .content { min-height: 0; display: grid; gap: 18px; align-content: center; }
+    .two { grid-template-columns: 1fr 1fr; align-items: stretch; }
+    .three { grid-template-columns: repeat(3, 1fr); }
+    .split-wide { grid-template-columns: 1.1fr .9fr; }
+    .grid { display: grid; gap: 16px; }
+    .panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      border-radius: var(--radius);
+      padding: clamp(16px, 2vw, 26px);
+      min-width: 0;
+    }
+    .panel h3 { margin-bottom: 10px; }
+    .panel p + p { margin-top: 10px; }
+    .accent-cyan { border-color: rgba(49,212,232,.42); }
+    .accent-green { border-color: rgba(84,210,140,.42); }
+    .accent-gold { border-color: rgba(245,184,75,.42); }
+    .accent-coral { border-color: rgba(255,127,110,.42); }
+
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 24px;
+    }
+    .pill {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.07);
+      border-radius: 999px;
+      padding: 8px 12px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .big-number {
+      display: block;
+      color: var(--text);
+      font-size: clamp(34px, 5vw, 64px);
+      line-height: 1;
+      font-weight: 850;
+      margin-bottom: 6px;
+    }
+    .label { color: var(--muted); font-size: 15px; line-height: 1.35; }
+    .list { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+    .list li {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 10px;
+      color: var(--muted);
+      line-height: 1.4;
+      font-size: clamp(15px, 1.25vw, 18px);
+    }
+    .list li::before {
+      content: "";
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      margin-top: 8px;
+      background: var(--cyan);
+      box-shadow: 0 0 18px rgba(49,212,232,.55);
+    }
+    .code {
+      font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      background: rgba(0,0,0,.22);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      color: #d9f7ff;
+      font-size: clamp(13px, 1.05vw, 16px);
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .pipeline { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; align-items: stretch; }
+    .step {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.06);
+      border-radius: var(--radius);
+      padding: 15px;
+      min-height: 112px;
+    }
+    .step strong { display: block; margin-bottom: 8px; color: var(--text); }
+    .step span { color: var(--muted); font-size: 14px; line-height: 1.35; }
+
+    .chart-card { display: grid; grid-template-rows: auto 1fr; min-height: 360px; }
+    .chart-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; }
+    .chart-title { font-weight: 850; }
+    .toggles { display: flex; gap: 8px; flex-wrap: wrap; }
+    .toggle {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.05);
+      padding: 7px 10px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .toggle.active { background: rgba(49,212,232,.16); border-color: rgba(49,212,232,.55); color: var(--text); }
+    svg.chart { width: 100%; height: 100%; min-height: 300px; overflow: visible; }
+    .axis { stroke: rgba(255,255,255,.22); stroke-width: 1; }
+    .gridline { stroke: rgba(255,255,255,.08); stroke-width: 1; }
+    .axis-label { fill: var(--muted); font-size: 12px; }
+    .line-loss { fill: none; stroke: var(--cyan); stroke-width: 3; }
+    .line-val { fill: none; stroke: var(--gold); stroke-width: 3; }
+    .line-mem { fill: none; stroke: var(--green); stroke-width: 3; }
+    .dot { stroke: var(--bg); stroke-width: 2; }
+    .tooltip {
+      position: fixed;
+      display: none;
+      pointer-events: none;
+      border: 1px solid var(--line);
+      background: rgba(7,16,20,.94);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      color: var(--text);
+      font-size: 13px;
+      box-shadow: var(--shadow);
+      z-index: 10;
+    }
+
+    .transformer {
+      min-height: 430px;
+      display: grid;
+      grid-template-rows: repeat(6, 1fr);
+      gap: 10px;
+    }
+    .layer {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      background: linear-gradient(90deg, rgba(49,212,232,.08), rgba(170,140,255,.07));
+    }
+    .layer span {
+      border-radius: 6px;
+      background: rgba(255,255,255,.07);
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .table { width: 100%; border-collapse: collapse; color: var(--muted); font-size: clamp(14px, 1.15vw, 17px); }
+    .table th, .table td { text-align: left; border-bottom: 1px solid var(--line); padding: 12px 10px; vertical-align: top; }
+    .table th { color: var(--text); }
+    .demo-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .demo-btn {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.05);
+      padding: 8px 12px;
+      cursor: pointer;
+      color: var(--muted);
+    }
+    .demo-btn.active { color: var(--text); border-color: rgba(84,210,140,.55); background: rgba(84,210,140,.14); }
+    .demo-box { min-height: 210px; }
+    .demo-box strong { color: var(--text); }
+
+    .anim-stage {
+      position: relative;
+      min-height: 420px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(0,0,0,.18);
+      overflow: hidden;
+      padding: 18px;
+    }
+    .anim-controls {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .action-btn {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.07);
+      border-radius: 999px;
+      padding: 8px 13px;
+      cursor: pointer;
+      color: var(--text);
+      font-weight: 750;
+    }
+    .action-btn:hover { border-color: rgba(49,212,232,.55); }
+    .token-row {
+      display: flex;
+      gap: 9px;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin: 8px 0 14px;
+    }
+    .word-token {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.07);
+      border-radius: 7px;
+      padding: 9px 12px;
+      min-width: 54px;
+      text-align: center;
+      cursor: pointer;
+      transition: transform .2s ease, border-color .2s ease, background .2s ease, box-shadow .2s ease;
+      font-weight: 800;
+    }
+    .lesson-strip {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.05);
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      color: var(--muted);
+      line-height: 1.35;
+      min-height: 58px;
+    }
+    .lesson-strip strong { color: var(--text); }
+    .micro-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin: 10px 0 12px;
+    }
+    .micro-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 10px;
+      background: rgba(255,255,255,.045);
+      min-height: 86px;
+    }
+    .micro-card strong { color: var(--text); display: block; margin-bottom: 6px; }
+    .micro-card span { color: var(--muted); font-size: 13px; line-height: 1.35; }
+    .active-formula {
+      font-family: "Cascadia Code", Consolas, monospace;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(0,0,0,.22);
+      padding: 10px 12px;
+      color: #d9f7ff;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    .word-token.active {
+      border-color: var(--gold);
+      background: rgba(245,184,75,.18);
+      box-shadow: 0 0 22px rgba(245,184,75,.32);
+      transform: translateY(-2px);
+    }
+    .word-token.related {
+      border-color: var(--cyan);
+      background: rgba(49,212,232,.12);
+    }
+    .block-flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(90px, 1fr));
+      gap: 10px;
+      align-items: center;
+      min-height: 230px;
+    }
+    .flow-box {
+      min-height: 92px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 12px;
+      color: var(--muted);
+      background: rgba(255,255,255,.055);
+      position: relative;
+      transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease, color .25s ease;
+    }
+    .flow-box.active {
+      color: var(--text);
+      border-color: var(--cyan);
+      box-shadow: 0 0 26px rgba(49,212,232,.28);
+      transform: translateY(-4px);
+    }
+    .flow-box::after {
+      content: "";
+      position: absolute;
+      right: -11px;
+      top: 50%;
+      width: 11px;
+      height: 2px;
+      background: rgba(255,255,255,.2);
+    }
+    .flow-box:last-child::after { display: none; }
+    .data-pulse {
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 22px rgba(49,212,232,.7);
+      opacity: 0;
+      transition: left .55s ease, top .55s ease, opacity .2s ease;
+      z-index: 2;
+    }
+    .head-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .mini-head {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      min-height: 72px;
+      background: rgba(255,255,255,.055);
+      color: var(--muted);
+      transition: transform .25s ease, border-color .25s ease, background .25s ease;
+    }
+    .mini-head.active {
+      transform: scale(1.03);
+      border-color: var(--green);
+      background: rgba(84,210,140,.12);
+      color: var(--text);
+    }
+    .attention-svg, .kv-svg {
+      width: 100%;
+      height: 300px;
+      overflow: visible;
+    }
+    .attention-svg { height: 360px; }
+    .matrix-wrap {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: start;
+      margin-top: 8px;
+    }
+    .attention-matrix {
+      display: grid;
+      gap: 2px;
+      justify-content: start;
+    }
+    .matrix-cell {
+      width: 32px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,.1);
+      color: var(--text);
+      font-size: 10px;
+      transition: transform .18s ease, outline-color .18s ease;
+    }
+    .matrix-cell.focus {
+      outline: 2px solid var(--gold);
+      transform: scale(1.08);
+      z-index: 1;
+    }
+    .matrix-axis {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.2;
+    }
+    .kv-lanes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 12px;
+    }
+    .kv-story {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      min-height: 46px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 10px;
+      background: rgba(0,0,0,.18);
+      margin: 10px 0 12px;
+    }
+    .kv-word {
+      border-radius: 6px;
+      padding: 6px 8px;
+      background: rgba(255,255,255,.08);
+      color: var(--muted);
+      font-weight: 750;
+    }
+    .kv-word.new { background: rgba(245,184,75,.18); color: var(--text); border: 1px solid rgba(245,184,75,.45); }
+    .kv-compute {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .compute-box {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 9px;
+      background: rgba(255,255,255,.045);
+      color: var(--muted);
+      font-size: 13px;
+      min-height: 72px;
+    }
+    .compute-box strong {
+      display: block;
+      color: var(--text);
+      font-size: 22px;
+      margin-bottom: 4px;
+    }
+    .kv-lane {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      min-height: 250px;
+      background: rgba(255,255,255,.045);
+    }
+    .kv-chip-row {
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+      min-height: 80px;
+      align-content: flex-start;
+    }
+    .kv-chip {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 7px 9px;
+      background: rgba(255,255,255,.07);
+      color: var(--muted);
+      font-size: 13px;
+      animation: chipIn .28s ease both;
+    }
+    .kv-chip.hot { border-color: var(--green); color: var(--text); background: rgba(84,210,140,.13); }
+    .kv-chip.recompute { border-color: var(--coral); color: var(--text); background: rgba(255,127,110,.14); }
+    .kv-stat {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      margin-top: 12px;
+      padding-top: 10px;
+      font-size: 14px;
+    }
+    .slider-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      margin-top: 10px;
+    }
+    input[type="range"] { width: 100%; accent-color: var(--cyan); }
+    @keyframes chipIn {
+      from { opacity: 0; transform: translateY(8px) scale(.95); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .controls {
+      height: 70px;
+      border-top: 1px solid var(--line);
+      background: rgba(0,0,0,.22);
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 16px;
+      align-items: center;
+      padding: 0 clamp(16px, 3vw, 38px);
+    }
+    .nav-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.06);
+      cursor: pointer;
+    }
+    .progress {
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.1);
+      overflow: hidden;
+    }
+    .progress span { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--cyan), var(--green), var(--gold)); }
+    .counter { color: var(--muted); font-weight: 800; min-width: 66px; text-align: right; }
+    .dots { display: flex; gap: 6px; justify-content: center; margin-top: 10px; }
+    .dot-nav {
+      width: 8px;
+      height: 8px;
+      border: 0;
+      padding: 0;
+      border-radius: 50%;
+      background: rgba(255,255,255,.25);
+      cursor: pointer;
+    }
+    .dot-nav.active { background: var(--cyan); }
+
+    @media (max-width: 900px) {
+      body { overflow: auto; }
+      html, body, .deck { min-height: 100%; height: auto; }
+      .slides { min-height: calc(100vh - 70px); }
+      .slide { position: relative; display: none; min-height: calc(100vh - 70px); }
+      .slide.active { display: grid; }
+      .two, .three, .split-wide, .pipeline { grid-template-columns: 1fr; }
+      .slide-head { flex-direction: column; }
+      .transformer { min-height: 300px; }
+      .layer { grid-template-columns: 1fr; }
+      .block-flow, .head-grid, .kv-lanes { grid-template-columns: 1fr; }
+      .flow-box::after { display: none; }
+      .controls { position: sticky; bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="deck">
+    <main class="slides" id="slides">
+      <section class="slide active">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">CSCI 642 NLP - Final Project Presentation</p>
+            <h1>Efficient Transformer Training on TinyStories</h1>
+            <div class="hero-meta">
+              <span class="pill">Naomie Bambara</span>
+              <span class="pill">Abhishek Adile</span>
+              <span class="pill">Abdellah Afellah</span>
+              <span class="pill">Dr. Singh Maninder - Spring 2026</span>
+            </div>
+          </div>
+          <div class="slide-no">01 / 12</div>
+        </header>
+        <div class="content split-wide">
+          <div class="panel accent-cyan">
+            <h3>Project Focus</h3>
+            <p>Train a compact GPT-style Transformer on TinyStories under constrained compute, then evaluate whether the resulting model can generate coherent stories efficiently.</p>
+            <p>The project combines data preprocessing, mixed precision training, GPU-aware batching, validation perplexity tracking, and KV-cache-ready inference.</p>
+          </div>
+          <div class="grid three">
+            <div class="panel"><span class="big-number">8,000</span><span class="label">training steps completed in the final run</span></div>
+            <div class="panel"><span class="big-number">7.42</span><span class="label">best validation perplexity observed</span></div>
+            <div class="panel"><span class="big-number">30.0M</span><span class="label">parameters in the trained configuration</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Introduction</p>
+            <h2>Why This Project Matters</h2>
+          </div>
+          <div class="slide-no">02 / 12</div>
+        </header>
+        <div class="content two">
+          <div class="panel accent-green">
+            <h3>The Challenge</h3>
+            <ul class="list">
+              <li>Large language models usually require compute budgets far beyond a class project.</li>
+              <li>Fast experimentation is difficult when training cost dominates every design choice.</li>
+              <li>Small models make it possible to study the full NLP pipeline rather than only a fragment.</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <h3>Our Approach</h3>
+            <ul class="list">
+              <li>Use TinyStories because it is language-rich, bounded, and tractable for small Transformers.</li>
+              <li>Train with AMP, tuned batching, checkpointing, and cached token tensors.</li>
+              <li>Measure validation loss and perplexity, then connect training quality to inference efficiency.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Problem Statement</p>
+            <h2>Constrained Optimization for Language Modeling</h2>
+          </div>
+          <div class="slide-no">03 / 12</div>
+        </header>
+        <div class="content three">
+          <div class="panel accent-cyan">
+            <h3>Model Capacity</h3>
+            <p>Depth, hidden size, and attention heads improve expressiveness, but larger models reduce the number of updates possible within a fixed training window.</p>
+          </div>
+          <div class="panel accent-gold">
+            <h3>Training Efficiency</h3>
+            <p>Batch size, gradient accumulation, learning rate schedule, mixed precision, and data loading all shape convergence speed.</p>
+          </div>
+          <div class="panel accent-coral">
+            <h3>Generalization</h3>
+            <p>Held-out validation perplexity is the main quantitative signal, so the model has to learn the distribution rather than memorize examples.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Experiment Design</p>
+            <h2>Research Questions</h2>
+          </div>
+          <div class="slide-no">04 / 12</div>
+        </header>
+        <div class="content two">
+          <div class="panel accent-cyan">
+            <h3>RQ1 - Efficiency vs. Quality</h3>
+            <p>How do inference settings, especially KV caching and sliding window cache size, affect latency, GPU memory, and generation quality in a small Transformer trained on TinyStories?</p>
+          </div>
+          <div class="panel accent-green">
+            <h3>RQ2 - Context Reuse</h3>
+            <p>Does greater reuse of previously computed context align with lower continuation perplexity on story-completion tasks?</p>
+          </div>
+          <div class="panel">
+            <h3>Final Run Scope</h3>
+            <p>The completed run establishes the trained baseline and validation curve. Full cache-window comparisons remain the next experimental extension.</p>
+          </div>
+          <div class="panel">
+            <h3>Hypothesis</h3>
+            <p>Efficient training can produce a capable story model, while cache-based inference should reduce repeated computation with a measurable memory-quality tradeoff.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Data Preprocessing</p>
+            <h2>TinyStories Pipeline</h2>
+          </div>
+          <div class="slide-no">05 / 12</div>
+        </header>
+        <div class="content">
+          <div class="grid three">
+            <div class="panel"><span class="big-number">~2.1M</span><span class="label">synthetic training stories</span></div>
+            <div class="panel"><span class="big-number">21,990</span><span class="label">validation stories in the project plan</span></div>
+            <div class="panel"><span class="big-number">256</span><span class="label">tokens per training chunk</span></div>
+          </div>
+          <div class="pipeline">
+            <div class="step"><strong>Load</strong><span>Download `roneneldan/TinyStories` from Hugging Face.</span></div>
+            <div class="step"><strong>Tokenize</strong><span>Encode with GPT-2 BPE vocabulary and append EOS.</span></div>
+            <div class="step"><strong>Cache</strong><span>Write `uint16` binary token files to remove training I/O bottlenecks.</span></div>
+            <div class="step"><strong>Chunk</strong><span>Memory-map fixed 256-token language modeling sequences.</span></div>
+            <div class="step"><strong>Evaluate</strong><span>Cache 500 validation stories for continuation experiments.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Model & Stack</p>
+            <h2>Decoder-Only Transformer Implementation</h2>
+          </div>
+          <div class="slide-no">06 / 12</div>
+        </header>
+        <div class="content split-wide">
+          <div class="panel">
+            <h3>Training Configuration</h3>
+            <div class="code">layers: 6
+heads: 6
+d_model: 384
+d_ff: 1536
+max_seq_len: 256
+vocab_size: 50,257
+batch_size: 30
+grad_accumulation_steps: 4
+learning_rate: 3e-4
+AMP: enabled
+weight_tying: enabled</div>
+          </div>
+          <div class="panel transformer" aria-label="Transformer architecture diagram">
+            <div class="layer"><span>RMSNorm</span><span>Multi-Head Attention</span><span>Residual</span></div>
+            <div class="layer"><span>RMSNorm</span><span>Feed Forward</span><span>Residual</span></div>
+            <div class="layer"><span>6 layers</span><span>6 heads</span><span>64 dim/head</span></div>
+            <div class="layer"><span>Token Embedding</span><span>Position Embedding</span><span>Dropout</span></div>
+            <div class="layer"><span>KV Cache</span><span>Full / Windowed</span><span>Generation</span></div>
+            <div class="layer"><span>Final Norm</span><span>Tied Output Projection</span><span>Next Token</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Interactive Explainer</p>
+            <h2>How a Transformer Block Works</h2>
+          </div>
+          <div class="slide-no">07 / 15</div>
+        </header>
+        <div class="content split-wide">
+          <div class="anim-stage" id="blockStage">
+            <div class="anim-controls">
+              <button class="action-btn" id="runBlock">Run Block</button>
+              <button class="action-btn" id="stepBlock">Step</button>
+              <span class="label" id="blockStatus">Start with token and position vectors.</span>
+            </div>
+            <div class="lesson-strip" id="blockLesson"><strong>Goal:</strong> predict the next word after "Lily gave Tom her red ball because he was". Watch how every token becomes a vector, reads context, then votes for the next token.</div>
+            <div class="token-row" id="blockTokens">
+              <span class="word-token">Lily</span><span class="word-token">gave</span><span class="word-token">Tom</span><span class="word-token">her</span><span class="word-token">red</span><span class="word-token">ball</span><span class="word-token">because</span><span class="word-token">he</span><span class="word-token">was</span><span class="word-token active">?</span>
+            </div>
+            <div class="block-flow" id="blockFlow">
+              <div class="flow-box" data-step="0"><strong>1. Tokenize</strong><span>words become ids</span></div>
+              <div class="flow-box" data-step="1"><strong>2. Embed</strong><span>ids become vectors</span></div>
+              <div class="flow-box" data-step="2"><strong>3. Make Q/K/V</strong><span>ask, match, copy</span></div>
+              <div class="flow-box" data-step="3"><strong>4. Attend</strong><span>"he" reads "Tom"</span></div>
+              <div class="flow-box" data-step="4"><strong>5. Transform</strong><span>FFN sharpens meaning</span></div>
+              <div class="flow-box" data-step="5"><strong>6. Predict</strong><span>sad, happy, tired...</span></div>
+            </div>
+            <div class="data-pulse" id="blockPulse"></div>
+            <div class="head-grid" id="headGrid">
+              <div class="mini-head">Head 1<br><span class="label">nearby words: "was"</span></div>
+              <div class="mini-head">Head 2<br><span class="label">pronoun link: he -> Tom</span></div>
+              <div class="mini-head">Head 3<br><span class="label">object link: ball</span></div>
+              <div class="mini-head">Head 4<br><span class="label">cause: because</span></div>
+            </div>
+          </div>
+          <div class="panel">
+            <h3>What to Remember</h3>
+            <ul class="list">
+              <li>A Transformer block repeatedly updates every token's vector.</li>
+              <li>Attention is the communication step: tokens decide which earlier tokens matter.</li>
+              <li>Multiple heads let the model track different relationships at the same time.</li>
+              <li>The final logits are a ranked list of candidate next tokens.</li>
+            </ul>
+            <div class="active-formula" id="blockFormula">output = TransformerBlock(input_vectors)</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Interactive Explainer</p>
+            <h2>Self-Attention: Tokens Looking at Tokens</h2>
+          </div>
+          <div class="slide-no">08 / 15</div>
+        </header>
+        <div class="content split-wide">
+          <div class="anim-stage">
+            <div class="anim-controls">
+              <button class="action-btn" id="playAttention">Animate Attention</button>
+              <button class="action-btn" id="toggleMask">Toggle Causal Mask</button>
+              <span class="label" id="attentionStatus">Click a token to show where its attention goes.</span>
+            </div>
+            <div class="lesson-strip" id="attentionLesson"><strong>Question:</strong> when the model is updating "he", which previous word tells us who "he" refers to?</div>
+            <div class="micro-grid">
+              <div class="micro-card"><strong>Query from focus token</strong><span id="queryText">he asks: who am I?</span></div>
+              <div class="micro-card"><strong>Keys from context</strong><span id="keyText">Tom offers: person/name</span></div>
+              <div class="micro-card"><strong>Values copied forward</strong><span id="valueText">Tom's identity is mixed into "he"</span></div>
+            </div>
+            <div class="token-row" id="attentionTokens"></div>
+            <svg class="attention-svg" id="attentionSvg" role="img" aria-label="Animated self-attention arcs"></svg>
+          </div>
+          <div class="panel">
+            <h3>Attention Score Matrix</h3>
+            <div class="matrix-wrap">
+              <div class="matrix-axis">row = token being updated<br>column = token it can read</div>
+              <div class="attention-matrix" id="attentionMatrix"></div>
+            </div>
+            <div class="active-formula" id="attentionFormula">Attention(Q,K,V) = softmax(QK^T / sqrt(d)) V</div>
+            <ul class="list">
+              <li>Brighter cells mean stronger attention.</li>
+              <li>Causal masking blocks future columns during generation.</li>
+              <li>The weighted sum of values becomes the token's new context-aware vector.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Interactive Explainer</p>
+            <h2>KV Caching: Reuse the Past During Generation</h2>
+          </div>
+          <div class="slide-no">09 / 15</div>
+        </header>
+        <div class="content">
+          <div class="anim-stage">
+            <div class="anim-controls">
+              <button class="action-btn" id="runKv">Generate Tokens</button>
+              <button class="action-btn" id="resetKv">Reset</button>
+              <span class="label" id="kvStatus">Without cache, every new token recomputes all earlier keys and values.</span>
+            </div>
+            <div class="slider-row">
+              <span>Sliding window</span>
+              <input id="kvWindow" type="range" min="2" max="8" value="5" />
+              <strong id="kvWindowLabel">5 tokens</strong>
+            </div>
+            <div class="lesson-strip" id="kvLesson"><strong>Generation rule:</strong> the model writes one token at a time. The old tokens do not change, so their Keys and Values can be stored and reused.</div>
+            <div class="kv-story" id="kvStory"></div>
+            <div class="kv-lanes">
+              <div class="kv-lane">
+                <h3>No KV Cache</h3>
+                <p class="label">Each generation step rebuilds K and V for the full prefix.</p>
+                <div class="kv-chip-row" id="noCacheChips"></div>
+                <div class="kv-stat"><span>Attention projections computed</span><strong id="noCacheCost">0</strong></div>
+              </div>
+              <div class="kv-lane">
+                <h3>With KV Cache</h3>
+                <p class="label">Past K and V tensors are stored; only the newest token is projected.</p>
+                <div class="kv-chip-row" id="cacheChips"></div>
+                <div class="kv-stat"><span>Attention projections computed</span><strong id="cacheCost">0</strong></div>
+              </div>
+            </div>
+            <div class="kv-compute">
+              <div class="compute-box"><strong id="kvSaved">0</strong>repeated projections avoided</div>
+              <div class="compute-box"><strong id="kvSpeedup">1.0x</strong>projection work reduction</div>
+              <div class="compute-box"><strong id="kvDropped">0</strong>old tokens outside window</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Experiment Procedure</p>
+            <h2>What Was Measured</h2>
+          </div>
+          <div class="slide-no">07 / 12</div>
+        </header>
+        <div class="content two">
+          <div class="panel accent-cyan">
+            <h3>Training Loop</h3>
+            <ul class="list">
+              <li>Train a fixed GPT-style Transformer on cached TinyStories tensors.</li>
+              <li>Log training loss and perplexity every 100 steps.</li>
+              <li>Evaluate validation loss and perplexity every 500 steps.</li>
+              <li>Track learning rate decay and GPU memory use.</li>
+            </ul>
+          </div>
+          <div class="panel accent-gold">
+            <h3>Evaluation Metrics</h3>
+            <ul class="list">
+              <li>Validation cross-entropy loss and perplexity.</li>
+              <li>Training perplexity trend over the run.</li>
+              <li>Allocated, reserved, and peak allocated GPU memory.</li>
+              <li>Planned follow-up: latency, cache hit rate, continuation perplexity, and story quality scoring.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Results & Discussion</p>
+            <h2>Training Loss and Validation Perplexity</h2>
+          </div>
+          <div class="slide-no">08 / 12</div>
+        </header>
+        <div class="content split-wide">
+          <div class="panel chart-card">
+            <div class="chart-head">
+              <span class="chart-title">Interactive Training Curve</span>
+              <div class="toggles">
+                <button class="toggle active" data-chart-mode="loss">Loss</button>
+                <button class="toggle" data-chart-mode="ppl">Perplexity</button>
+              </div>
+            </div>
+            <svg id="trainingChart" class="chart" role="img" aria-label="Training and validation chart"></svg>
+          </div>
+          <div class="grid">
+            <div class="panel"><span class="big-number">10.89 to 2.09</span><span class="label">training loss decreased from step 0 to step 8,000</span></div>
+            <div class="panel"><span class="big-number">53,900 to 8.08</span><span class="label">training perplexity dropped sharply during the run</span></div>
+            <div class="panel"><span class="big-number">2.004</span><span class="label">best validation loss at step 8,000</span></div>
+            <div class="panel"><span class="big-number">7.421</span><span class="label">best validation perplexity at step 8,000</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Results & Discussion</p>
+            <h2>GPU Memory Behavior</h2>
+          </div>
+          <div class="slide-no">09 / 12</div>
+        </header>
+        <div class="content split-wide">
+          <div class="grid">
+            <div class="panel"><span class="big-number">1.66 GB</span><span class="label">steady allocated GPU memory after warmup</span></div>
+            <div class="panel"><span class="big-number">13.31 GB</span><span class="label">maximum reserved memory observed</span></div>
+            <div class="panel"><span class="big-number">9.74 GB</span><span class="label">maximum allocated peak recorded by CUDA</span></div>
+          </div>
+          <div class="panel chart-card">
+            <div class="chart-head">
+              <span class="chart-title">Memory Log</span>
+              <div class="toggles">
+                <button class="toggle active" data-memory-mode="allocated">Allocated</button>
+                <button class="toggle" data-memory-mode="reserved">Reserved</button>
+                <button class="toggle" data-memory-mode="peak">Peak</button>
+              </div>
+            </div>
+            <svg id="memoryChart" class="chart" role="img" aria-label="GPU memory chart"></svg>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Conclusions & Future Scope</p>
+            <h2>What the Final Run Shows</h2>
+          </div>
+          <div class="slide-no">10 / 12</div>
+        </header>
+        <div class="content two">
+          <div class="panel accent-green">
+            <h3>Conclusions</h3>
+            <ul class="list">
+              <li>The cached preprocessing pipeline and memory-mapped dataset made repeated training practical.</li>
+              <li>The model reached validation perplexity 7.42, showing meaningful distribution learning on TinyStories.</li>
+              <li>GPU allocation stabilized after warmup, which supports reproducible follow-up inference experiments.</li>
+            </ul>
+          </div>
+          <div class="panel accent-coral">
+            <h3>Future Scope</h3>
+            <ul class="list">
+              <li>Complete full KV-cache vs. sliding-window cache comparisons at W = 64, 128, and 256.</li>
+              <li>Measure latency per token, cache hit rate, continuation perplexity, and story-quality scores.</li>
+              <li>Compare generated stories qualitatively and evaluate whether lower perplexity tracks coherence.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">Task Assignments & Demo</p>
+            <h2>Team Contributions</h2>
+          </div>
+          <div class="slide-no">11 / 12</div>
+        </header>
+        <div class="content two">
+          <div class="panel">
+            <table class="table">
+              <thead><tr><th>Member</th><th>Contribution</th></tr></thead>
+              <tbody>
+                <tr><td>Abhishek Adile</td><td>Project lead, experiment design, research questions, evaluation metrics, KV caching planning.</td></tr>
+                <tr><td>Naomie Bambara</td><td>Literature review, introduction, problem statement, dataset description, preprocessing design.</td></tr>
+                <tr><td>Abdellah Afellah</td><td>Model architecture, AMP implementation, GPU optimization, training loop and data pipeline.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="panel">
+            <h3>Demo Talking Points</h3>
+            <div class="demo-tabs">
+              <button class="demo-btn active" data-demo="preprocess">Preprocess</button>
+              <button class="demo-btn" data-demo="train">Train</button>
+              <button class="demo-btn" data-demo="generate">Generate</button>
+            </div>
+            <p class="demo-box" id="demoBox"><strong>Preprocess:</strong> show `data/preprocess.py` loading TinyStories, tokenizing with GPT-2 BPE, writing `train.bin` and `validation.bin`, and caching continuation stories for evaluation.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <header class="slide-head">
+          <div>
+            <p class="kicker">References</p>
+            <h2>Sources Used</h2>
+          </div>
+          <div class="slide-no">12 / 12</div>
+        </header>
+        <div class="content">
+          <div class="panel">
+            <ul class="list">
+              <li>Vaswani, A., et al. (2017). Attention Is All You Need. NeurIPS.</li>
+              <li>Kaplan, J., et al. (2020). Scaling Laws for Neural Language Models. arXiv:2001.08361.</li>
+              <li>Eldan, R., & Li, Y. (2023). TinyStories: How Small Can Language Models Be and Still Speak Coherent English. arXiv:2305.07759.</li>
+              <li>Micikevicius, P., et al. (2018). Mixed Precision Training. ICLR 2018.</li>
+              <li>Jiang, A. Q., et al. (2023). Mistral 7B. arXiv:2310.06825.</li>
+              <li>Project repository files: `tinystories-transformer`, `training_log.csv`, `memory_log.csv`, and project update documents.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <nav class="controls" aria-label="Presentation controls">
+      <button class="nav-btn" id="prev" aria-label="Previous slide">&lt;</button>
+      <div>
+        <div class="progress"><span id="progressBar"></span></div>
+        <div class="dots" id="dots"></div>
+      </div>
+      <div style="display:flex; align-items:center; gap:12px;">
+        <span class="counter" id="counter">1 / 12</span>
+        <button class="nav-btn" id="next" aria-label="Next slide">&gt;</button>
+      </div>
+    </nav>
+  </div>
+  <div class="tooltip" id="tooltip"></div>
+
+  <script>
+    const trainingCsv = `step,train_loss,train_ppl,val_loss,val_ppl,lr,gpu_mb
+0,10.894882202148438,53899.808399388254,,,6e-07,1426.50439453125
+100,9.676615715026855,15940.458483755012,,,6.0599999999999996e-05,1655.73046875
+200,8.228623390197754,3746.6724943046524,,,0.00012059999999999999,1656.62451171875
+300,6.44918966293335,632.1897983668997,,,0.00018059999999999997,1656.62451171875
+400,5.24741268157959,190.07385013812996,,,0.0002406,1656.62451171875
+500,4.616992950439453,101.18929295735899,4.579826173782348,97.49744512188275,0.0003,1656.62451171875
+600,4.215681076049805,67.74028645004618,,,0.0002999948934881158,1656.62451171875
+700,4.035705089569092,56.58280212008614,,,0.0002999795743001494,1656.62451171875
+800,3.744584321975708,42.29142394904993,,,0.0002999540434791357,1656.62451171875
+900,3.6694157123565674,39.228978155568704,,,0.00029991830276338726,1656.62451171875
+1000,3.6229474544525146,37.447780946869976,3.5516458570957186,34.870662411044194,0.0002998723545863759,1656.62451171875
+1100,3.4526302814483643,31.583356267703543,,,0.0002998162020765671,1656.62451171875
+1200,3.386432647705078,29.56031190768284,,,0.00029974984905720706,1656.62451171875
+1300,3.3945391178131104,29.800915598257685,,,0.00029967330004606214,1656.62451171875
+1400,3.2042551040649414,24.63714107331711,,,0.0002995865602551114,1656.62451171875
+1500,3.206174850463867,24.684483564421072,3.1241925859451296,22.74152585113102,0.00029948963559019203,1656.62451171875
+1600,3.149690866470337,23.32885173585393,,,0.00029938253265059654,1656.62451171875
+1700,3.0203542709350586,20.49855243931977,,,0.0002992652587286241,1656.62451171875
+1800,2.962111711502075,19.33876656269759,,,0.0002991378218090838,1656.62451171875
+1900,2.932586669921875,18.775918679781453,,,0.0002990002244655881,1656.62451171875
+2000,2.8267390727996826,16.88909981970341,2.7677257657051086,15.922405094042877,0.0002988524759645008,1656.62451171875
+2100,2.803098201751709,16.49461954491575,,,0.0002986945862635372,1656.62451171875
+2200,2.793022871017456,16.32922067709971,,,0.0002985265660114121,1656.62451171875
+2300,2.749584436416626,15.635208411410969,,,0.0002983484265475357,1656.62451171875
+2400,2.720266103744507,15.183547748489592,,,0.0002981601799017593,1656.62451171875
+2500,2.6894776821136475,14.723363271152307,2.5683670192956924,13.04449878954309,0.00029796183879417135,1656.62451171875
+2600,2.7021117210388184,14.91055824247805,,,0.0002977534166349463,1656.62451171875
+2700,2.669722080230713,14.435146295730295,,,0.00029753492752423957,1656.62451171875
+2800,2.615844488143921,13.677716279940434,,,0.0002973063862521351,1656.62451171875
+2900,2.607609510421753,13.565562238030855,,,0.00029706780829863836,1656.62451171875
+3000,2.521373748779297,12.44569173642998,2.439167162179947,11.4646155379411,0.00029681920983372487,1656.62451171875
+3100,2.577986240386963,13.170320539957167,,,0.00029656060771744314,1656.62451171875
+3200,2.563380479812622,12.979321960917816,,,0.0002962920195000672,1656.62451171875
+3300,2.4491419792175293,11.57840187006992,,,0.0002960134634223038,1656.62451171875
+3400,2.4747989177703857,11.879293362675396,,,0.00029572495841555114,1656.62451171875
+3500,2.458883762359619,11.691752325083954,2.314423095226288,10.119059904095715,0.0002954265241022045,1656.62451171875
+3600,2.3900530338287354,10.91305510896135,,,0.0002951181807950139,1656.62451171875
+3700,2.4518675804138184,11.60999982930167,,,0.0002947999494964946,1656.62451171875
+3800,2.3590426445007324,10.580086290544457,,,0.00029447185189839097,1656.62451171875
+3900,2.4216692447662354,11.263970299045162,,,0.00029413391038118214,1656.62451171875
+4000,2.2893450260162354,9.86846440197388,2.245915949344635,9.449064312199105,0.0002937861470136439,1656.62451171875
+4100,2.3546056747436523,10.533250773709745,,,0.0002934285845524554,1656.62451171875
+4200,2.3026421070098877,10.000565323053024,,,0.00029306124644186036,1656.62451171875
+4300,2.2875165939331055,9.850439687124316,,,0.00029268415681338307,1656.62451171875
+4400,2.286287546157837,9.838338181599204,,,0.0002922973404855947,1656.62451171875
+4500,2.217085123062134,9.180527228293024,2.173159182071686,8.786000551181287,0.0002919008239639326,1656.62451171875
+4600,2.2119219303131104,9.133248912264024,,,0.0002914946344405684,1656.62451171875
+4700,2.2454111576080322,9.44429323560982,,,0.0002910787997943208,1656.62451171875
+4800,2.262488603591919,9.607024273643099,,,0.00029065334859061466,1656.62451171875
+4900,2.16646146774292,8.727347857091985,,,0.0002902183100814843,1656.62451171875
+5000,2.210240602493286,9.117904166718427,2.133808685541153,8.447235419014411,0.000289773714205619,1656.62451171875
+5100,2.2813000679016113,9.789407474493745,,,0.0002893195915884498,1656.62451171875
+5200,2.1430823802948,8.525676299482961,,,0.00028885597354228043,1656.62451171875
+5300,2.2503654956817627,9.491193755858255,,,0.0002883828920664542,1656.62451171875
+5400,2.157697916030884,8.651163084751027,,,0.0002879003798475645,1656.62451171875
+5500,2.1146774291992188,8.286726415942268,2.1105952262878416,8.25296637207678,0.0002874084702597019,1656.62451171875
+5600,2.183136224746704,8.87480965771341,,,0.00028690719736474136,1656.62451171875
+5700,2.1767876148223877,8.818646964745013,,,0.00028639659591266875,1656.62451171875
+5800,2.1574535369873047,8.649048750550085,,,0.0002858767013419497,1656.62451171875
+5900,2.1379430294036865,8.481965496957677,,,0.00028534754977993534,1656.62451171875
+6000,2.1769845485687256,8.819858326824254,2.114511774778366,8.285349083011936,0.0002848091780433026,1656.62451171875
+6100,2.146235227584839,8.552599121613781,,,0.0002842688139403515,1656.62451171875
+6200,2.147681474685669,8.564977242050837,,,0.0002837124537816226,1656.62451171875
+6300,2.2213551998138428,9.219817097716229,,,0.00028314698956643646,1656.62451171875
+6400,2.2427494525909424,9.41919334344507,,,0.00028257245979545614,1656.62451171875
+6500,2.1495730876922607,8.581194197669525,2.0849588614702226,8.044260545838627,0.0002819889035865896,1656.62451171875
+6600,2.0803725719451904,8.007451710468551,,,0.00028139636067232653,1656.62451171875
+6700,2.242985725402832,9.421419105675254,,,0.00028079487139703267,1656.62451171875
+6800,2.2041594982147217,9.062631208132293,,,0.000280184476714203,1656.62451171875
+6900,2.143371343612671,8.528140510098877,,,0.00027956521818367367,1656.62451171875
+7000,2.0381290912628174,7.676234222262293,2.0518974500894545,7.782654303256895,0.00027893713796879187,1656.62451171875
+7100,2.135829210281372,8.464062085067889,,,0.00027830027883354543,1656.62451171875
+7200,2.0949413776397705,8.124964651646644,,,0.0002776546841396509,1656.62451171875
+7300,2.0319595336914062,7.62902104526113,,,0.0002770003978436013,1656.62451171875
+7400,2.0984153747558594,8.153239840940865,,,0.0002763374644936732,1656.62451171875
+7500,1.9680176973342896,7.156476116596262,2.0257759284973145,7.581991746263338,0.0002756659292268937,1656.62451171875
+7600,2.1038389205932617,8.197579441181867,,,0.00027498583776596716,1656.62451171875
+7700,2.0821540355682373,8.021729408227655,,,0.0002742972364161618,1656.62451171875
+7800,2.062511444091797,7.865699289214532,,,0.00027360017206215736,1656.62451171875
+7900,2.078960418701172,7.996151941939495,,,0.00027289469216485265,1656.62451171875
+8000,2.089017152786255,8.076972831651567,2.0042956751585006,7.420865355862794,0.000272180844758134,1656.62451171875`;
+
+    const memoryCsv = `step,allocated_mb,reserved_mb,max_allocated_mb
+0,1426.50439453125,9466.0,9389.94482421875
+200,1656.62451171875,13314.0,9742.52392578125
+400,1656.62451171875,12078.0,9742.52392578125
+600,1656.62451171875,12078.0,9742.52392578125
+800,1656.62451171875,12078.0,9742.52392578125
+1000,1656.62451171875,12078.0,9742.52392578125
+1200,1656.62451171875,12078.0,9742.52392578125
+1400,1656.62451171875,12078.0,9742.52392578125
+1600,1656.62451171875,12078.0,9742.52392578125
+1800,1656.62451171875,12078.0,9742.52392578125
+2000,1656.62451171875,12078.0,9742.52392578125
+2200,1656.62451171875,12078.0,9742.52392578125
+2400,1656.62451171875,12078.0,9742.52392578125
+2600,1656.62451171875,12078.0,9742.52392578125
+2800,1656.62451171875,12078.0,9742.52392578125
+3000,1656.62451171875,12078.0,9742.52392578125
+3200,1656.62451171875,12078.0,9742.52392578125
+3400,1656.62451171875,12078.0,9742.52392578125
+3600,1656.62451171875,12078.0,9742.52392578125
+3800,1656.62451171875,12078.0,9742.52392578125
+4000,1656.62451171875,12078.0,9742.52392578125
+4200,1656.62451171875,12078.0,9742.52392578125
+4400,1656.62451171875,12078.0,9742.52392578125
+4600,1656.62451171875,12078.0,9742.52392578125
+4800,1656.62451171875,12078.0,9742.52392578125
+5000,1656.62451171875,12078.0,9742.52392578125
+5200,1656.62451171875,12078.0,9742.52392578125
+5400,1656.62451171875,12078.0,9742.52392578125
+5600,1656.62451171875,12078.0,9742.52392578125
+5800,1656.62451171875,12078.0,9742.52392578125
+6000,1656.62451171875,12078.0,9742.52392578125
+6200,1656.62451171875,12078.0,9742.52392578125
+6400,1656.62451171875,12078.0,9742.52392578125
+6600,1656.62451171875,12078.0,9742.52392578125
+6800,1656.62451171875,12078.0,9742.52392578125
+7000,1656.62451171875,12078.0,9742.52392578125
+7200,1656.62451171875,12078.0,9742.52392578125
+7400,1656.62451171875,12078.0,9742.52392578125
+7600,1656.62451171875,12078.0,9742.52392578125
+7800,1656.62451171875,12078.0,9742.52392578125
+8000,1656.62451171875,12078.0,9742.52392578125`;
+
+    const slides = [...document.querySelectorAll(".slide")];
+    const dots = document.getElementById("dots");
+    const progressBar = document.getElementById("progressBar");
+    const counter = document.getElementById("counter");
+    let current = 0;
+
+    slides.forEach((slide, i) => {
+      const no = slide.querySelector(".slide-no");
+      if (no) no.textContent = `${String(i + 1).padStart(2, "0")} / ${slides.length}`;
+      const dot = document.createElement("button");
+      dot.className = "dot-nav" + (i === 0 ? " active" : "");
+      dot.ariaLabel = `Go to slide ${i + 1}`;
+      dot.addEventListener("click", () => go(i));
+      dots.appendChild(dot);
+    });
+
+    function go(index) {
+      current = Math.max(0, Math.min(slides.length - 1, index));
+      slides.forEach((slide, i) => slide.classList.toggle("active", i === current));
+      [...dots.children].forEach((dot, i) => dot.classList.toggle("active", i === current));
+      progressBar.style.width = `${((current + 1) / slides.length) * 100}%`;
+      counter.textContent = `${current + 1} / ${slides.length}`;
+      drawCharts();
+      initActiveAnimation();
+    }
+
+    document.getElementById("prev").addEventListener("click", () => go(current - 1));
+    document.getElementById("next").addEventListener("click", () => go(current + 1));
+    document.addEventListener("keydown", (event) => {
+      if (["ArrowRight", "PageDown", " "].includes(event.key)) go(current + 1);
+      if (["ArrowLeft", "PageUp"].includes(event.key)) go(current - 1);
+      if (event.key === "Home") go(0);
+      if (event.key === "End") go(slides.length - 1);
+    });
+
+    function parseCsv(csv) {
+      const [header, ...lines] = csv.trim().split(/\n/);
+      const keys = header.split(",");
+      return lines.map(line => {
+        const values = line.split(",");
+        const row = {};
+        keys.forEach((key, i) => row[key] = values[i] === "" ? null : Number(values[i]));
+        return row;
+      });
+    }
+
+    const training = parseCsv(trainingCsv);
+    const memory = parseCsv(memoryCsv);
+    let chartMode = "loss";
+    let memoryMode = "allocated";
+    const tooltip = document.getElementById("tooltip");
+
+    document.querySelectorAll("[data-chart-mode]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        chartMode = btn.dataset.chartMode;
+        document.querySelectorAll("[data-chart-mode]").forEach(b => b.classList.toggle("active", b === btn));
+        drawTrainingChart();
+      });
+    });
+
+    document.querySelectorAll("[data-memory-mode]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        memoryMode = btn.dataset.memoryMode;
+        document.querySelectorAll("[data-memory-mode]").forEach(b => b.classList.toggle("active", b === btn));
+        drawMemoryChart();
+      });
+    });
+
+    document.querySelectorAll("[data-demo]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("[data-demo]").forEach(b => b.classList.toggle("active", b === btn));
+        const text = {
+          preprocess: "<strong>Preprocess:</strong> show `data/preprocess.py` loading TinyStories, tokenizing with GPT-2 BPE, writing `train.bin` and `validation.bin`, and caching continuation stories for evaluation.",
+          train: "<strong>Train:</strong> show `configs/default.yaml`, the 6-layer / 6-head model setup, AMP-enabled training, validation every 500 steps, and the loss curve in this presentation.",
+          generate: "<strong>Generate:</strong> show `inference/generate.py` or `inference/chat.py`, explain full KV cache vs. windowed cache, and use the trained checkpoint to produce a short TinyStories-style continuation."
+        };
+        document.getElementById("demoBox").innerHTML = text[btn.dataset.demo];
+      });
+    });
+
+    const blockDescriptions = [
+      "1. Tokenize: the text is converted into integer ids. The model never sees words directly.",
+      "2. Embed: each id becomes a vector. Position vectors tell the model word order.",
+      "3. Q/K/V: every token creates a Query, Key, and Value. Query asks; Key matches; Value carries content.",
+      "4. Attend: the token 'he' puts high weight on 'Tom', so the model knows who 'he' refers to.",
+      "5. Transform: the feed-forward network updates each token after context has been mixed in.",
+      "6. Predict: the final vector votes for the next word. Here, 'sad' becomes plausible."
+    ];
+    const blockLessons = [
+      "<strong>Token ids:</strong> text is now numbers, which lets the model use matrix multiplication.",
+      "<strong>Embeddings:</strong> 'Tom' and 'he' become vectors that can be compared in attention.",
+      "<strong>Q/K/V:</strong> the focus token builds a question, every past token advertises a key, and values hold information to copy.",
+      "<strong>Attention:</strong> strong links act like soft pointers. One head can learn he -> Tom while another tracks the cause word.",
+      "<strong>FFN:</strong> after tokens communicate, each token does private computation to refine meaning.",
+      "<strong>Prediction:</strong> logits rank the vocabulary. Training pushes the correct next token higher."
+    ];
+    const blockFormulas = [
+      "tokens = tokenizer(text)",
+      "x = token_embedding[id] + position_embedding[pos]",
+      "Q = xWq, K = xWk, V = xWv",
+      "mix = softmax(QK^T / sqrt(d)) V",
+      "x = x + FFN(Norm(x + attention))",
+      "next_token = argmax(output_projection(x_last))"
+    ];
+    let blockStep = 0;
+    let blockTimer = null;
+
+    function setBlockStep(step) {
+      const boxes = [...document.querySelectorAll("#blockFlow .flow-box")];
+      const pulse = document.getElementById("blockPulse");
+      const stage = document.getElementById("blockStage");
+      const status = document.getElementById("blockStatus");
+      const lesson = document.getElementById("blockLesson");
+      const formula = document.getElementById("blockFormula");
+      const tokens = [...document.querySelectorAll("#blockTokens .word-token")];
+      const heads = [...document.querySelectorAll("#headGrid .mini-head")];
+      if (!boxes.length || !pulse || !stage || !status) return;
+      blockStep = ((step % boxes.length) + boxes.length) % boxes.length;
+      boxes.forEach((box, i) => box.classList.toggle("active", i === blockStep));
+      heads.forEach(head => head.classList.toggle("active", blockStep === 2 || blockStep === 3));
+      tokens.forEach((token, i) => {
+        const active = blockStep === 0 || (blockStep === 3 && [2, 7, 8, 9].includes(i)) || (blockStep === 5 && i === 9);
+        token.classList.toggle("active", active);
+        token.classList.toggle("related", blockStep === 3 && [2, 6, 7].includes(i));
+      });
+      const box = boxes[blockStep].getBoundingClientRect();
+      const root = stage.getBoundingClientRect();
+      pulse.style.opacity = "1";
+      pulse.style.left = `${box.left - root.left + box.width / 2 - 9}px`;
+      pulse.style.top = `${box.top - root.top + box.height / 2 - 9}px`;
+      status.textContent = blockDescriptions[blockStep];
+      if (lesson) lesson.innerHTML = blockLessons[blockStep];
+      if (formula) formula.textContent = blockFormulas[blockStep];
+    }
+
+    function runBlockAnimation() {
+      clearInterval(blockTimer);
+      setBlockStep(0);
+      let i = 1;
+      blockTimer = setInterval(() => {
+        setBlockStep(i);
+        i += 1;
+        if (i > 5) clearInterval(blockTimer);
+      }, 780);
+    }
+
+    document.getElementById("runBlock")?.addEventListener("click", runBlockAnimation);
+    document.getElementById("stepBlock")?.addEventListener("click", () => setBlockStep(blockStep + 1));
+
+    const attnTokens = ["Lily", "gave", "Tom", "her", "red", "ball", "because", "he", "was", "sad"];
+    const attnWeights = [
+      [0.55, .08, .05, .04, .04, .03, .03, .03, .02, .02],
+      [.25, .45, .08, .04, .03, .03, .03, .03, .03, .03],
+      [.05, .08, .50, .05, .03, .03, .03, .10, .04, .09],
+      [.45, .08, .12, .18, .04, .03, .03, .03, .02, .02],
+      [.03, .03, .03, .03, .40, .35, .04, .03, .03, .03],
+      [.04, .04, .04, .03, .28, .45, .04, .03, .03, .02],
+      [.04, .05, .08, .04, .03, .03, .45, .12, .07, .09],
+      [.05, .05, .42, .05, .03, .03, .12, .15, .05, .05],
+      [.03, .03, .08, .03, .03, .03, .15, .10, .45, .07],
+      [.03, .03, .13, .03, .03, .03, .08, .12, .18, .34]
+    ];
+    let selectedAttention = 7;
+    let attentionReady = false;
+    let causalMaskOn = true;
+
+    function setupAttentionTokens() {
+      const row = document.getElementById("attentionTokens");
+      if (!row || attentionReady) return;
+      row.innerHTML = "";
+      attnTokens.forEach((token, i) => {
+        const el = document.createElement("button");
+        el.className = "word-token";
+        el.textContent = token;
+        el.addEventListener("click", () => drawAttention(i));
+        row.appendChild(el);
+      });
+      attentionReady = true;
+      drawAttention(selectedAttention);
+    }
+
+    function renderAttentionMatrix(index) {
+      const matrix = document.getElementById("attentionMatrix");
+      if (!matrix) return;
+      const size = attnTokens.length;
+      matrix.style.gridTemplateColumns = `repeat(${size}, 32px)`;
+      matrix.innerHTML = "";
+      for (let r = 0; r < size; r++) {
+        for (let c = 0; c < size; c++) {
+          const masked = causalMaskOn && c > r;
+          const value = masked ? 0 : attnWeights[r][c];
+          const cell = document.createElement("div");
+          cell.className = "matrix-cell" + (r === index && c === selectedAttention ? " focus" : "");
+          if (r === index && value >= .12) cell.classList.add("focus");
+          const alpha = masked ? .04 : Math.min(.85, .08 + value * 1.45);
+          cell.style.background = masked ? "rgba(255,255,255,.025)" : `rgba(49,212,232,${alpha})`;
+          cell.style.color = masked ? "rgba(255,255,255,.18)" : "var(--text)";
+          cell.textContent = masked ? "X" : Math.round(value * 100);
+          matrix.appendChild(cell);
+        }
+      }
+    }
+
+    function updateQkvText(index) {
+      const focus = attnTokens[index];
+      const strongest = attnWeights[index]
+        .map((w, i) => ({ w, token: attnTokens[i], i }))
+        .filter(item => !causalMaskOn || item.i <= index)
+        .sort((a, b) => b.w - a.w)[0];
+      const query = document.getElementById("queryText");
+      const key = document.getElementById("keyText");
+      const value = document.getElementById("valueText");
+      const lesson = document.getElementById("attentionLesson");
+      const formula = document.getElementById("attentionFormula");
+      if (query) query.textContent = `${focus} asks: what context do I need right now?`;
+      if (key) key.textContent = `${strongest.token} has the best matching key (${Math.round(strongest.w * 100)}%).`;
+      if (value) value.textContent = `${strongest.token}'s value is copied most strongly into ${focus}.`;
+      if (lesson) lesson.innerHTML = `<strong>Focus token:</strong> "${focus}" updates itself by reading allowed context. Highest visible match: "${strongest.token}".`;
+      if (formula) formula.textContent = causalMaskOn
+        ? "decoder attention = softmax(mask(QK^T) / sqrt(d)) V"
+        : "unmasked attention = softmax(QK^T / sqrt(d)) V";
+    }
+
+    function drawAttention(index) {
+      selectedAttention = index;
+      const svg = document.getElementById("attentionSvg");
+      const row = document.getElementById("attentionTokens");
+      const status = document.getElementById("attentionStatus");
+      if (!svg || !row) return;
+      const width = Math.max(680, svg.getBoundingClientRect().width || 850);
+      const height = 360;
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      svg.innerHTML = "";
+      const xs = attnTokens.map((_, i) => 46 + i * ((width - 92) / (attnTokens.length - 1)));
+      const baseY = 64;
+      [...row.children].forEach((el, i) => {
+        const weight = attnWeights[index][i];
+        el.classList.toggle("active", i === index);
+        el.classList.toggle("related", i !== index && weight >= .12);
+      });
+      attnTokens.forEach((token, i) => {
+        if (causalMaskOn && i > index) {
+          const shade = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+          shade.setAttribute("x", xs[i] - 28);
+          shade.setAttribute("y", "42");
+          shade.setAttribute("width", "56");
+          shade.setAttribute("height", "260");
+          shade.setAttribute("rx", "6");
+          shade.setAttribute("fill", "rgba(255,127,110,.08)");
+          shade.setAttribute("stroke", "rgba(255,127,110,.18)");
+          svg.appendChild(shade);
+        }
+        const weight = attnWeights[index][i];
+        if (causalMaskOn && i > index) return;
+        if (weight < .03) return;
+        const startX = xs[index];
+        const endX = xs[i];
+        const dist = Math.abs(endX - startX);
+        const controlY = baseY + 72 + dist * .12;
+        const stroke = weight > .3 ? "var(--gold)" : weight > .11 ? "var(--cyan)" : "rgba(255,255,255,.28)";
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", `M${startX},${baseY} Q${(startX + endX) / 2},${controlY} ${endX},${baseY}`);
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", stroke);
+        path.setAttribute("stroke-width", String(Math.max(2, weight * 16)));
+        path.setAttribute("stroke-linecap", "round");
+        path.setAttribute("opacity", "0");
+        svg.appendChild(path);
+        const length = path.getTotalLength();
+        path.style.strokeDasharray = length;
+        path.style.strokeDashoffset = length;
+        requestAnimationFrame(() => {
+          path.style.transition = "stroke-dashoffset .65s ease, opacity .25s ease";
+          path.style.strokeDashoffset = "0";
+          path.setAttribute("opacity", String(Math.max(.25, weight * 1.35)));
+        });
+        if (weight >= .12) {
+          const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          text.setAttribute("x", String((startX + endX) / 2));
+          text.setAttribute("y", String(controlY + 18));
+          text.setAttribute("text-anchor", "middle");
+          text.setAttribute("fill", stroke);
+          text.setAttribute("font-size", "14");
+          text.setAttribute("font-weight", "800");
+          text.textContent = `${Math.round(weight * 100)}%`;
+          svg.appendChild(text);
+        }
+      });
+      const legend = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      legend.setAttribute("x", "18");
+      legend.setAttribute("y", "340");
+      legend.setAttribute("fill", "var(--muted)");
+      legend.setAttribute("font-size", "13");
+      legend.textContent = causalMaskOn ? "Causal mask is on: future tokens are blocked." : "Mask is off for teaching: all tokens are visible.";
+      svg.appendChild(legend);
+      attnTokens.forEach((token, i) => {
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", xs[i]);
+        circle.setAttribute("cy", baseY);
+        circle.setAttribute("r", i === index ? "9" : "6");
+        circle.setAttribute("fill", i === index ? "var(--gold)" : "var(--cyan)");
+        circle.setAttribute("opacity", i === index ? "1" : ".65");
+        svg.appendChild(circle);
+        const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        label.setAttribute("x", xs[i]);
+        label.setAttribute("y", "32");
+        label.setAttribute("text-anchor", "middle");
+        label.setAttribute("fill", "var(--muted)");
+        label.setAttribute("font-size", "13");
+        label.textContent = token;
+        svg.appendChild(label);
+      });
+      renderAttentionMatrix(index);
+      updateQkvText(index);
+      if (status) status.textContent = `"${attnTokens[index]}" is using attention weights to build a context-aware vector.`;
+    }
+
+    document.getElementById("playAttention")?.addEventListener("click", () => {
+      let i = 0;
+      const timer = setInterval(() => {
+        drawAttention(i);
+        i += 1;
+        if (i >= attnTokens.length) clearInterval(timer);
+      }, 650);
+    });
+    document.getElementById("toggleMask")?.addEventListener("click", () => {
+      causalMaskOn = !causalMaskOn;
+      drawAttention(selectedAttention);
+    });
+
+    const kvWords = ["Lily", "gave", "Tom", "a", "red", "ball", "because", "he", "was", "sad"];
+    let kvIndex = 0;
+    let noCacheCost = 0;
+    let cacheCost = 0;
+
+    function renderKv() {
+      const noCache = document.getElementById("noCacheChips");
+      const cache = document.getElementById("cacheChips");
+      const win = Number(document.getElementById("kvWindow")?.value || 5);
+      const label = document.getElementById("kvWindowLabel");
+      if (label) label.textContent = `${win} tokens`;
+      if (!noCache || !cache) return;
+      const prefix = kvWords.slice(0, kvIndex);
+      const windowed = prefix.slice(Math.max(0, prefix.length - win));
+      const story = document.getElementById("kvStory");
+      if (story) {
+        story.innerHTML = kvWords.map((w, i) => {
+          const cls = i === kvIndex - 1 ? "kv-word new" : "kv-word";
+          return i < kvIndex ? `<span class="${cls}">${w}</span>` : `<span class="kv-word">?</span>`;
+        }).join("");
+      }
+      noCache.innerHTML = prefix.map(w => `<span class="kv-chip recompute">${w}</span>`).join("");
+      cache.innerHTML = windowed.map((w, i) => `<span class="kv-chip ${i === windowed.length - 1 ? "hot" : ""}">${w}</span>`).join("");
+      document.getElementById("noCacheCost").textContent = noCacheCost;
+      document.getElementById("cacheCost").textContent = cacheCost;
+      const saved = noCacheCost - cacheCost;
+      const speedup = cacheCost ? (noCacheCost / cacheCost).toFixed(1) : "1.0";
+      const dropped = Math.max(0, prefix.length - win);
+      document.getElementById("kvSaved").textContent = saved;
+      document.getElementById("kvSpeedup").textContent = `${speedup}x`;
+      document.getElementById("kvDropped").textContent = dropped;
+      const status = document.getElementById("kvStatus");
+      const lesson = document.getElementById("kvLesson");
+      if (status && kvIndex > 0) status.textContent = `Step ${kvIndex}: no-cache recomputes ${kvIndex} token projections; cache computes only the new token.`;
+      if (lesson && kvIndex > 0) lesson.innerHTML = `<strong>What changed?</strong> The old prefix is identical from the previous step, so cached K/V tensors are reused. Only "${prefix[prefix.length - 1]}" is new.`;
+    }
+
+    function resetKv() {
+      kvIndex = 0;
+      noCacheCost = 0;
+      cacheCost = 0;
+      renderKv();
+      const status = document.getElementById("kvStatus");
+      if (status) status.textContent = "Without cache, every new token recomputes all earlier keys and values.";
+    }
+
+    function stepKv() {
+      if (kvIndex >= kvWords.length) return;
+      kvIndex += 1;
+      noCacheCost += kvIndex;
+      cacheCost += 1;
+      renderKv();
+    }
+
+    document.getElementById("runKv")?.addEventListener("click", () => {
+      resetKv();
+      let i = 0;
+      const timer = setInterval(() => {
+        stepKv();
+        i += 1;
+        if (i >= kvWords.length) clearInterval(timer);
+      }, 520);
+    });
+    document.getElementById("resetKv")?.addEventListener("click", resetKv);
+    document.getElementById("kvWindow")?.addEventListener("input", renderKv);
+
+    function initActiveAnimation() {
+      if (current === 6) setBlockStep(blockStep);
+      if (current === 7) setupAttentionTokens();
+      if (current === 8) renderKv();
+    }
+
+    function chartScales(rows, yKeys, width, height, pad) {
+      const xMin = Math.min(...rows.map(d => d.step));
+      const xMax = Math.max(...rows.map(d => d.step));
+      const yVals = rows.flatMap(d => yKeys.map(k => d[k])).filter(v => v != null && Number.isFinite(v));
+      const yMin = Math.min(...yVals);
+      const yMax = Math.max(...yVals);
+      const yPad = (yMax - yMin) * .08 || 1;
+      const sx = x => pad.left + ((x - xMin) / (xMax - xMin || 1)) * (width - pad.left - pad.right);
+      const sy = y => height - pad.bottom - ((y - (yMin - yPad)) / ((yMax + yPad) - (yMin - yPad))) * (height - pad.top - pad.bottom);
+      return { sx, sy, xMin, xMax, yMin: yMin - yPad, yMax: yMax + yPad };
+    }
+
+    function linePath(rows, xKey, yKey, scales) {
+      return rows.filter(d => d[yKey] != null).map((d, i) => `${i ? "L" : "M"}${scales.sx(d[xKey]).toFixed(2)},${scales.sy(d[yKey]).toFixed(2)}`).join(" ");
+    }
+
+    function drawBase(svg, scales, width, height, pad) {
+      const xTicks = [scales.xMin, (scales.xMin + scales.xMax) / 2, scales.xMax];
+      const yTicks = [scales.yMin, (scales.yMin + scales.yMax) / 2, scales.yMax];
+      svg.insertAdjacentHTML("beforeend", `
+        <line class="axis" x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}"></line>
+        <line class="axis" x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}"></line>
+        ${yTicks.map(y => `<line class="gridline" x1="${pad.left}" y1="${scales.sy(y)}" x2="${width - pad.right}" y2="${scales.sy(y)}"></line><text class="axis-label" x="8" y="${scales.sy(y) + 4}">${formatMetric(y)}</text>`).join("")}
+        ${xTicks.map(x => `<text class="axis-label" x="${scales.sx(x) - 18}" y="${height - 12}">${Math.round(x)}</text>`).join("")}
+      `);
+    }
+
+    function formatMetric(value) {
+      if (Math.abs(value) >= 1000) return Math.round(value).toLocaleString();
+      if (Math.abs(value) >= 100) return value.toFixed(0);
+      if (Math.abs(value) >= 10) return value.toFixed(1);
+      return value.toFixed(2);
+    }
+
+    function drawTrainingChart() {
+      const svg = document.getElementById("trainingChart");
+      if (!svg) return;
+      const box = svg.getBoundingClientRect();
+      const width = Math.max(520, box.width || 720);
+      const height = Math.max(300, box.height || 340);
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      svg.innerHTML = "";
+      const pad = { top: 16, right: 24, bottom: 42, left: 58 };
+      const keys = chartMode === "loss" ? ["train_loss", "val_loss"] : ["train_ppl", "val_ppl"];
+      const scales = chartScales(training, keys, width, height, pad);
+      drawBase(svg, scales, width, height, pad);
+      svg.insertAdjacentHTML("beforeend", `
+        <path class="line-loss" d="${linePath(training, "step", keys[0], scales)}"></path>
+        <path class="line-val" d="${linePath(training, "step", keys[1], scales)}"></path>
+        <text class="axis-label" x="${width - 230}" y="24" fill="var(--cyan)">training ${chartMode}</text>
+        <text class="axis-label" x="${width - 112}" y="24" fill="var(--gold)">validation ${chartMode}</text>
+      `);
+      training.filter(d => d[keys[1]] != null).forEach(d => addPoint(svg, d, keys[1], scales, "var(--gold)", chartMode));
+      training.filter((_, i) => i % 5 === 0).forEach(d => addPoint(svg, d, keys[0], scales, "var(--cyan)", chartMode));
+    }
+
+    function drawMemoryChart() {
+      const svg = document.getElementById("memoryChart");
+      if (!svg) return;
+      const box = svg.getBoundingClientRect();
+      const width = Math.max(520, box.width || 720);
+      const height = Math.max(300, box.height || 340);
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      svg.innerHTML = "";
+      const pad = { top: 16, right: 24, bottom: 42, left: 68 };
+      const key = memoryMode === "allocated" ? "allocated_mb" : memoryMode === "reserved" ? "reserved_mb" : "max_allocated_mb";
+      const scales = chartScales(memory, [key], width, height, pad);
+      drawBase(svg, scales, width, height, pad);
+      svg.insertAdjacentHTML("beforeend", `<path class="line-mem" d="${linePath(memory, "step", key, scales)}"></path>`);
+      memory.filter((_, i) => i % 4 === 0).forEach(d => addPoint(svg, d, key, scales, "var(--green)", "MB"));
+    }
+
+    function addPoint(svg, d, key, scales, color, label) {
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("class", "dot");
+      circle.setAttribute("cx", scales.sx(d.step));
+      circle.setAttribute("cy", scales.sy(d[key]));
+      circle.setAttribute("r", 5);
+      circle.setAttribute("fill", color);
+      circle.addEventListener("mousemove", event => {
+        tooltip.style.display = "block";
+        tooltip.style.left = `${event.clientX + 12}px`;
+        tooltip.style.top = `${event.clientY + 12}px`;
+        tooltip.innerHTML = `<strong>step ${d.step}</strong><br>${label}: ${formatMetric(d[key])}`;
+      });
+      circle.addEventListener("mouseleave", () => tooltip.style.display = "none");
+      svg.appendChild(circle);
+    }
+
+    function drawCharts() {
+      if (current === 10) drawTrainingChart();
+      if (current === 11) drawMemoryChart();
+    }
+
+    window.addEventListener("resize", drawCharts);
+    go(0);
+  </script>
+</body>
+</html>

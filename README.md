@@ -265,10 +265,25 @@ After training on Colab, download `checkpoints/best.pt` from Google Drive to you
 
 ```bash
 # Activate your venv first
-venv\Scripts\activate
+.venv\Scripts\activate.bat
 
 # Start the chat REPL
 python scripts/chat_terminal.py --checkpoint checkpoints/best.pt --device cuda
+
+# if you want to use UV
+uv run python scripts/chat_terminal.py --checkpoint checkpoints/best.pt --device cuda
+
+#I added a verification option. Run:
+
+uv run python scripts/chat_terminal.py --checkpoint checkpoints/best.pt --device cuda --max_new_tokens 80 --show_stats
+# After each reply it will print something like:
+
+#[stats] generated=80 tokens | time=...s | tok/s=... | kv=full | hit_rate=...
+#To compare KV cache vs no cache:
+
+uv run python scripts/chat_terminal.py --checkpoint checkpoints/best.pt --device cuda --kv_mode full --max_new_tokens 80 --show_stats
+uv run python scripts/chat_terminal.py --checkpoint checkpoints/best.pt --device cuda --kv_mode none --max_new_tokens 80 --show_stats
+#You should see kv=full with a high hit rate. Also, I reduced the default chat generation from 200 to 120 tokens and switched chat to torch.inference_mode() for lower inference overhead.
 ```
 
 You will see:
