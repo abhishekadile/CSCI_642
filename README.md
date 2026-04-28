@@ -56,6 +56,12 @@ source .venv/bin/activate
 uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 uv pip install -r requirements.txt
 
+# Optional: authenticate Hugging Face downloads
+# Windows PowerShell:
+$env:HF_TOKEN = "your_huggingface_token"
+# Linux/Mac:
+export HF_TOKEN="your_huggingface_token"
+
 # Preprocess the dataset (downloads TinyStories from HuggingFace, tokenizes, chunks)
 # This runs once and caches binary tensors to data/cache/
 uv run python data/preprocess.py
@@ -151,9 +157,13 @@ If your Colab runtime is already inside `/content/CSCI_642`, run this same cell 
 
 ### Cell 5: Preprocess Dataset
 
-This downloads TinyStories from HuggingFace (~500MB), tokenizes with the GPT-2 BPE tokenizer, chunks into 256-token sequences, and saves binary tensor files to `data/cache/`. Takes 5–8 minutes on the first run. Results are cached — do not re-run unless you change chunk size.
+This downloads TinyStories from HuggingFace (~1GB), tokenizes with the GPT-2 BPE tokenizer, chunks into 256-token sequences, and saves binary tensor files to `data/cache/`. Takes several minutes on the first run. Results are cached, so do not re-run unless you change chunk size.
+
+Tokenization is expected to take longer than character-level preprocessing because GPT-2 BPE is segmenting 2.1M stories into hundreds of millions of token IDs. The project uses `tiktoken.encode_batch()` so the full split should take minutes, not hours. Set `HF_TOKEN` in the environment if Hugging Face downloads are rate-limited.
 
 ```python
+# Optional: set HF_TOKEN in the environment before this cell to use authenticated
+# Hugging Face Hub requests and avoid anonymous rate limits.
 !python data/preprocess.py
 ```
 
@@ -161,9 +171,11 @@ This downloads TinyStories from HuggingFace (~500MB), tokenizes with the GPT-2 B
 
 The training loop runs for exactly 1 hour (3600 seconds wall-clock), then saves the final checkpoint and exits cleanly. Checkpoints are saved to `checkpoints/` locally and synced to Google Drive every 500 steps, so a Colab disconnect will not lose your progress.
 
+Colab uses `configs/colab_t4.yaml`: no batch-size auto-tuning, batch size 48, 2 DataLoader workers, line-style training logs, and `torch.compile` disabled to avoid startup bottlenecks. Seeing only ~5GB of 15GB VRAM used is not automatically bad; GPU utilization and tokens/second matter more than filling memory. Increase batch size only if GPU utilization stays low.
+
 ```python
 !python scripts/train.py \
-  --config configs/default.yaml \
+  --config configs/colab_t4.yaml \
   --time_limit 3600 \
   --device cuda
 ```
@@ -171,11 +183,15 @@ The training loop runs for exactly 1 hour (3600 seconds wall-clock), then saves 
 **What you will see during training:**
 
 ```
-Step 100 | Loss: 4.231 | Val PPL: — | LR: 1.2e-4 | GPU: 8.4 GB / 15.9 GB
-Step 500 | Loss: 3.187 | Val PPL: 24.3 | LR: 3e-4 | GPU: 9.1 GB / 15.9 GB | ✓ best checkpoint saved
-Step 1000 | Loss: 2.844 | Val PPL: 17.8 | LR: 2.9e-4 | GPU: 9.1 GB / 15.9 GB | ✓ best checkpoint saved
+Step 100 | Loss: 4.2310 | PPL: 68.79 | Tok/s: 64,258 | LR: 8.33e-06 | Elapsed: 00:08 | ETA: 59:51 | GPU: 96%
+Step 200 | Loss: 3.4026 | PPL: 30.04 | Tok/s: 67,700 | LR: 1.67e-05 | Elapsed: 00:11 | ETA: 59:48 | GPU: 94%
+Step 500 | Loss: 2.8035 | PPL: 16.50 | Tok/s: 67,013 | LR: 4.17e-05 | Elapsed: 00:22 | ETA: 59:37 | GPU: 94%
+
+Evaluating...
+[timestamp] Evaluated 200 batches | val_loss=2.2898, val_ppl=9.87
+[timestamp] Saved checkpoint: checkpoints/best.pt
 ...
-[1:00:00] Time limit reached. Saving latest checkpoint. Training complete.
+[timestamp] Time limit reached. Saving latest checkpoint.
 ```
 
 ### Cell 7: Plot Training Curves
@@ -200,7 +216,7 @@ If your session dropped, reconnect, re-run Cells 1–5. Cell 3 will pull the lat
 
 ```python
 !python scripts/train.py \
-  --config configs/default.yaml \
+  --config configs/colab_t4.yaml \
   --time_limit 3600 \
   --resume checkpoints/latest.pt \
   --device cuda
@@ -308,7 +324,7 @@ The following optimizations are applied automatically at training start:
 | `cudnn.benchmark = True` | Auto-tunes CUDA kernels for fixed input shapes | 5–15% throughput gain |
 | `allow_tf32 = True` | Uses TF32 on Ampere+ (RTX 2080 is Turing — approximation only) | Minor speedup |
 | Pinned memory DataLoader | `pin_memory=True`, `prefetch_factor=2` | Faster host-to-device transfers |
-| `torch.compile` | JIT-compiles the model graph (PyTorch 2.x) | 10–30% speedup where supported |
+| `torch.compile` | Optional model graph compilation | Disabled by default to avoid Triton/startup bottlenecks |
 | Gradient accumulation | Accumulates gradients over 4 steps | Effective batch size 4x without extra VRAM |
 | BatchSizeAutoTuner | Optional binary search for max batch size | Disabled by default after Colab selected batch size 30 |
 | Cache flushing | `torch.cuda.empty_cache()` every 100 steps | Prevents memory fragmentation |
@@ -362,14 +378,17 @@ model:
   max_seq_len: 256    # Training and inference context length
 
 training:
-  batch_size: 30                 # Locked after Colab auto-tuning
+  batch_size: 30             # Generic safe default; Colab T4 uses 48
   time_limit_seconds: 3600   # Wall-clock training budget (1 hour)
   val_every_steps: 500        # How often to compute validation perplexity
+  val_max_batches: 200        # Validation batches per eval
   grad_accumulation_steps: 4  # Effective batch = batch_size * grad_accumulation_steps
-  log_every_steps: 10         # Avoid synchronizing GPU every step for logging
+  log_every_steps: 100        # Line-style status output interval
+  progress_style: "line"      # Use readable Step N logs instead of tqdm
 
 gpu:
-  auto_tune_batch_size: false # Batch size is fixed at the tuned Colab value
+  auto_tune_batch_size: false # Avoid startup auto-tuning bottlenecks
+  use_torch_compile: false    # Avoid compile/Triton startup bottlenecks
   use_fused_adamw: true
 
 data:
@@ -383,6 +402,8 @@ inference:
   top_k: 50
 ```
 
+Use `configs/colab_t4.yaml` on Colab T4. It disables batch auto-tuning, uses batch size 48, and uses line-style logs with token throughput and GPU utilization.
+
 For local RTX 2080 experiments, use `configs/local_rtx2080.yaml`. It uses a fixed batch size of 30, 4 DataLoader workers, higher prefetching, fused AdamW, and disables `torch.compile` because Windows PyTorch Inductor requires a working Triton install.
 
 ---
@@ -394,6 +415,7 @@ CSCI_642/
 │
 ├── .cursorrules          ← Cursor codebase map and vibe-coding rules
 ├── configs/default.yaml  ← All hyperparameters (single source of truth)
+├── configs/colab_t4.yaml ← Colab T4 training profile
 ├── configs/local_rtx2080.yaml ← Local RTX 2080 training profile
 │
 ├── data/

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import torch
@@ -40,10 +41,14 @@ class ChatSession:
         self.max_seq_len = getattr(model, "max_seq_len", 256)
         self.history_tokens: list[int] = []
         self.turns: list[tuple[str, str]] = []
+        self.last_stats: dict[str, float | int | str] = {}
 
         if self.device.type == "cuda":
             props = torch.cuda.get_device_properties(self.device)
-            print(f"Using device: {props.name} ({props.total_memory / 1e9:.1f} GB)")
+            print(
+                f"Using device: {props.name} "
+                f"({props.total_memory / 1e9:.1f} GB)"
+            )
         else:
             print("Using device: CPU")
 
@@ -52,14 +57,25 @@ class ChatSession:
         prompt = f"\nUser: {user_input}\nModel:"
         user_tokens = self.tokenizer.encode(prompt)
         self.history_tokens.extend(user_tokens)
-        self.history_tokens = self.history_tokens[-self.max_seq_len :]
+        self.history_tokens = self.history_tokens[-self.max_seq_len:]
 
-        input_ids = torch.tensor([self.history_tokens], dtype=torch.long, device=self.device)
+        input_ids = torch.tensor(
+            [self.history_tokens],
+            dtype=torch.long,
+            device=self.device,
+        )
         kv_cache = None
         if self.kv_cache_mode != "none":
-            kv_cache = KVCache(self.kv_cache_mode, self.window_size, n_layers=getattr(self.model, "n_layers", 6))
+            kv_cache = KVCache(
+                self.kv_cache_mode,
+                self.window_size,
+                n_layers=getattr(self.model, "n_layers", 6),
+            )
 
-        with torch.no_grad():
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        start_time = time.perf_counter()
+        with torch.inference_mode():
             generated = self.model.generate(
                 input_ids,
                 max_new_tokens=self.max_new_tokens,
@@ -69,13 +85,26 @@ class ChatSession:
                 eos_token_id=self.tokenizer.EOS_TOKEN_ID,
                 kv_cache=kv_cache,
             )
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        elapsed = time.perf_counter() - start_time
 
-        new_tokens = generated[0].tolist()[input_ids.size(1) :]
+        new_tokens = generated[0].tolist()[input_ids.size(1):]
         response = self.tokenizer.decode(new_tokens).split("\nUser:")[0].strip()
         response_tokens = self.tokenizer.encode(response, add_eos=False)
         self.history_tokens.extend(response_tokens)
-        self.history_tokens = self.history_tokens[-self.max_seq_len :]
+        self.history_tokens = self.history_tokens[-self.max_seq_len:]
         self.turns.append((user_input, response))
+        self.last_stats = {
+            "prompt_tokens": input_ids.size(1),
+            "generated_tokens": len(new_tokens),
+            "elapsed_seconds": elapsed,
+            "tokens_per_second": len(new_tokens) / max(elapsed, 1e-9),
+            "kv_cache_mode": self.kv_cache_mode,
+            "kv_cache_hit_rate": (
+                kv_cache.cache_hit_rate if kv_cache is not None else 0.0
+            ),
+        }
         return response
 
     def reset(self) -> None:
@@ -86,7 +115,8 @@ class ChatSession:
     def save_conversation(self, path: str) -> None:
         """Save full conversation to a plain text file."""
         out_path = Path(path)
-        out_path.parent.mkdir(parents=True, exist_ok=True) if out_path.parent != Path(".") else None
+        if out_path.parent != Path("."):
+            out_path.parent.mkdir(parents=True, exist_ok=True)
         with out_path.open("w", encoding="utf-8") as f:
             for user, model in self.turns:
                 f.write(f"You: {user}\nModel: {model}\n\n")

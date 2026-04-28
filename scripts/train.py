@@ -35,7 +35,11 @@ def create_adamw(model, config, device):
     use_fused = bool(config.gpu.get("use_fused_adamw", True))
     if device.type == "cuda" and use_fused:
         try:
-            optimizer = torch.optim.AdamW(model.parameters(), fused=True, **kwargs)
+            optimizer = torch.optim.AdamW(
+                model.parameters(),
+                fused=True,
+                **kwargs,
+            )
             log("Using fused AdamW optimizer")
             return optimizer
         except TypeError:
@@ -64,9 +68,11 @@ def main() -> None:
         device = torch.device("cpu")
 
     set_seed(int(config.training.seed))
+    log("Building model...")
     model = GPTModel(config.model).to(device)
     model.summary()
 
+    log("Loading data...")
     cache_dir = Path(config.data.tensor_cache_dir)
     seq_len = int(config.data.chunk_size)
     train_dataset = TinyStoriesDataset(
@@ -77,6 +83,8 @@ def main() -> None:
         str(cache_dir / "validation.bin"),
         seq_len=seq_len,
     )
+    log(f"Train samples: {len(train_dataset):,}")
+    log(f"Val samples: {len(val_dataset):,}")
 
     if config.gpu.auto_tune_batch_size:
         BatchSizeAutoTuner(model, config, device).tune()
@@ -95,12 +103,20 @@ def main() -> None:
         num_workers=int(config.data.num_workers),
         prefetch_factor=int(config.data.get("prefetch_factor", 2)),
     )
+    log(f"Train batches: {len(train_loader):,}")
+    log(f"Val batches: {len(val_loader):,}")
 
     optimizer = create_adamw(model, config, device)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
     resume_step = 0
     if args.resume:
-        ckpt = load_checkpoint(args.resume, model, optimizer, scaler, device=device)
+        ckpt = load_checkpoint(
+            args.resume,
+            model,
+            optimizer,
+            scaler,
+            device=device,
+        )
         resume_step = int(ckpt.get("step", 0))
 
     model = setup_gpu_optimization(model, config, device)

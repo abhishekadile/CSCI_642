@@ -37,18 +37,38 @@ def main():
     parser.add_argument("--checkpoint", default="checkpoints/best.pt")
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--device", default="auto")
-    parser.add_argument("--kv_mode", default="full", choices=["full", "sliding_window", "none"])
+    parser.add_argument(
+        "--kv_mode",
+        default="full",
+        choices=["full", "sliding_window", "none"],
+    )
     parser.add_argument("--window_size", type=int, default=256)
     parser.add_argument("--temperature", type=float, default=0.8)
-    parser.add_argument("--max_new_tokens", type=int, default=200)
+    parser.add_argument("--max_new_tokens", type=int, default=120)
+    parser.add_argument(
+        "--show_stats",
+        action="store_true",
+        help="Print generation speed and KV cache hit rate after each reply.",
+    )
     args = parser.parse_args()
 
-    device = torch.device("cuda" if args.device == "auto" and torch.cuda.is_available() else args.device)
+    device = torch.device(
+        "cuda"
+        if args.device == "auto" and torch.cuda.is_available()
+        else args.device
+    )
     if args.device == "auto" and not torch.cuda.is_available():
         device = torch.device("cpu")
     ckpt = safe_torch_load(args.checkpoint, device)
-    config = ckpt.get("config") if isinstance(ckpt, dict) and ckpt.get("config") is not None else OmegaConf.load(args.config)
-    model_config = config.model if hasattr(config, "model") else config["model"]
+    config = (
+        ckpt.get("config")
+        if isinstance(ckpt, dict) and ckpt.get("config") is not None
+        else OmegaConf.load(args.config)
+    )
+    if hasattr(config, "model"):
+        model_config = config.model
+    else:
+        model_config = config["model"]
     model = GPTModel(model_config)
     model.load_state_dict(ckpt["model_state_dict"])
     tokenizer = TinyStoriesTokenizer()
@@ -90,6 +110,16 @@ def main():
         for char in response:
             print(char, end="", flush=True)
         print()
+        if args.show_stats:
+            stats = session.last_stats
+            print(
+                "[stats] "
+                f"generated={stats['generated_tokens']} tokens | "
+                f"time={stats['elapsed_seconds']:.2f}s | "
+                f"tok/s={stats['tokens_per_second']:.1f} | "
+                f"kv={stats['kv_cache_mode']} | "
+                f"hit_rate={stats['kv_cache_hit_rate']:.2%}"
+            )
 
 
 if __name__ == "__main__":

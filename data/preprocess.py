@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -38,9 +39,14 @@ def tokenize_split(dataset, tokenizer: TinyStoriesTokenizer, split_name: str, ou
     texts = [row.get("text") or row.get("story") or "" for row in dataset]
     total_tokens = 0
 
+    if tokenizer._encoding is not None:
+        batch_size = 10_000
+    else:
+        batch_size = 1_000
+    log(f"Tokenizing {len(texts):,} {split_name} stories in batches of {batch_size:,}")
+
     with tmp_path.open("ab") as f:
         if tokenizer._encoding is not None:
-            batch_size = 10_000
             for i in tqdm(range(0, len(texts), batch_size), desc=f"Tokenizing {split_name}"):
                 batch = texts[i : i + batch_size]
                 encoded_batch = tokenizer._encoding.encode_batch(
@@ -51,7 +57,6 @@ def tokenize_split(dataset, tokenizer: TinyStoriesTokenizer, split_name: str, ou
                     np.asarray(ids, dtype=np.uint16).tofile(f)
                     total_tokens += len(ids)
         else:
-            batch_size = 1_000
             for i in tqdm(range(0, len(texts), batch_size), desc=f"Tokenizing {split_name}"):
                 batch = texts[i : i + batch_size]
                 encoded_batch = tokenizer._hf_tokenizer(
@@ -92,8 +97,14 @@ def main() -> None:
     dataset_name = cfg_get(config, "data", "dataset_name", "roneneldan/TinyStories")
     n_cont = int(cfg_get(config, "data", "val_continuation_n_stories", 500))
 
-    log(f"Loading {dataset_name}")
-    ds = load_dataset(dataset_name)
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    log("Loading data...")
+    log(f"Downloading/loading {dataset_name}")
+    if hf_token:
+        log("Using HF_TOKEN for authenticated Hugging Face Hub requests")
+    else:
+        log("HF_TOKEN not set; using unauthenticated Hugging Face Hub requests")
+    ds = load_dataset(dataset_name, token=hf_token)
     train_split = ds["train"]
     val_split_name = "validation" if "validation" in ds else "train"
     val_split = ds[val_split_name]
