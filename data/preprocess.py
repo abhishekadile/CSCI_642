@@ -30,15 +30,42 @@ def tokenize_split(dataset, tokenizer: TinyStoriesTokenizer, split_name: str, ou
         log(f"{out_path} exists; skipping {split_name} preprocessing")
         return
 
-    token_buffer: list[int] = []
-    text_key = "text"
-    for row in tqdm(dataset, desc=f"Tokenizing {split_name}"):
-        story = row.get(text_key) or row.get("story") or ""
-        token_buffer.extend(tokenizer.encode_story(story))
-
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    np.asarray(token_buffer, dtype=np.uint16).tofile(out_path)
-    log(f"Wrote {len(token_buffer):,} tokens to {out_path}")
+    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    if tmp_path.exists():
+        tmp_path.unlink()
+
+    texts = [row.get("text") or row.get("story") or "" for row in dataset]
+    total_tokens = 0
+
+    with tmp_path.open("ab") as f:
+        if tokenizer._encoding is not None:
+            batch_size = 10_000
+            for i in tqdm(range(0, len(texts), batch_size), desc=f"Tokenizing {split_name}"):
+                batch = texts[i : i + batch_size]
+                encoded_batch = tokenizer._encoding.encode_batch(
+                    batch, allowed_special={"<|endoftext|>"}
+                )
+                for ids in encoded_batch:
+                    ids.append(tokenizer.EOS_TOKEN_ID)
+                    np.asarray(ids, dtype=np.uint16).tofile(f)
+                    total_tokens += len(ids)
+        else:
+            batch_size = 1_000
+            for i in tqdm(range(0, len(texts), batch_size), desc=f"Tokenizing {split_name}"):
+                batch = texts[i : i + batch_size]
+                encoded_batch = tokenizer._hf_tokenizer(
+                    batch,
+                    add_special_tokens=False,
+                    return_attention_mask=False,
+                )["input_ids"]
+                for ids in encoded_batch:
+                    ids.append(tokenizer.EOS_TOKEN_ID)
+                    np.asarray(ids, dtype=np.uint16).tofile(f)
+                    total_tokens += len(ids)
+
+    tmp_path.replace(out_path)
+    log(f"Wrote {total_tokens:,} tokens to {out_path}")
 
 
 def save_continuation_stories(dataset, tokenizer: TinyStoriesTokenizer, out_path: Path, n_stories: int) -> None:
