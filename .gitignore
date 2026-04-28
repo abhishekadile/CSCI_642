@@ -3,6 +3,7 @@ data/raw/
 data/cache/
 results/
 __pycache__/
+.venv/
 *.pt
 *.bin
 *.pth

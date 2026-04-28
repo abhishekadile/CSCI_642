@@ -34,9 +34,9 @@ class TinyStoriesDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         start = idx * self.seq_len
         end = start + self.seq_len + 1
-        chunk = np.asarray(self.tokens[start:end], dtype=np.int64)
-        x = torch.from_numpy(chunk[:-1].copy()).long()
-        y = torch.from_numpy(chunk[1:].copy()).long()
+        chunk = np.asarray(self.tokens[start:end], dtype=np.int64).copy()
+        x = torch.from_numpy(chunk[:-1])
+        y = torch.from_numpy(chunk[1:])
         return x, y
 
 
@@ -45,6 +45,7 @@ def create_dataloaders(config: Any) -> tuple[DataLoader, DataLoader]:
     cache_dir = Path(cfg_get(config, "data", "tensor_cache_dir", "data/cache"))
     batch_size = int(cfg_get(config, "training", "batch_size", 32))
     num_workers = int(cfg_get(config, "data", "num_workers", 4))
+    prefetch_factor = int(cfg_get(config, "data", "prefetch_factor", 2))
 
     train_dataset = TinyStoriesDataset(str(cache_dir / "train.bin"), seq_len=seq_len)
     val_dataset = TinyStoriesDataset(str(cache_dir / "validation.bin"), seq_len=seq_len)
@@ -56,7 +57,7 @@ def create_dataloaders(config: Any) -> tuple[DataLoader, DataLoader]:
     }
     if num_workers > 0:
         kwargs["persistent_workers"] = True
-        kwargs["prefetch_factor"] = 2
+        kwargs["prefetch_factor"] = prefetch_factor
 
     train_loader = DataLoader(train_dataset, shuffle=True, **kwargs)
     val_loader = DataLoader(val_dataset, shuffle=False, **kwargs)

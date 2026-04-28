@@ -17,10 +17,30 @@ if str(ROOT) not in sys.path:
 from data.dataset import TinyStoriesDataset
 from model.transformer import GPTModel
 from training.checkpointing import load_checkpoint
-from training.gpu_optimizer import BatchSizeAutoTuner, create_optimized_dataloader, setup_gpu_optimization
+from training.gpu_optimizer import (
+    BatchSizeAutoTuner,
+    create_optimized_dataloader,
+    setup_gpu_optimization,
+)
 from training.trainer import train
 from utils.logging_utils import log
 from utils.seed import set_seed
+
+
+def create_adamw(model, config, device):
+    kwargs = {
+        "lr": float(config.training.learning_rate),
+        "betas": (0.9, 0.95),
+    }
+    use_fused = bool(config.gpu.get("use_fused_adamw", True))
+    if device.type == "cuda" and use_fused:
+        try:
+            optimizer = torch.optim.AdamW(model.parameters(), fused=True, **kwargs)
+            log("Using fused AdamW optimizer")
+            return optimizer
+        except TypeError:
+            log("Fused AdamW not available; falling back to standard AdamW")
+    return torch.optim.AdamW(model.parameters(), **kwargs)
 
 
 def main() -> None:
@@ -34,7 +54,12 @@ def main() -> None:
     config = OmegaConf.load(args.config)
     if args.time_limit is not None:
         config.training.time_limit_seconds = args.time_limit
-    device = torch.device("cuda" if args.device == "auto" and torch.cuda.is_available() else args.device)
+    device_name = (
+        "cuda"
+        if args.device == "auto" and torch.cuda.is_available()
+        else args.device
+    )
+    device = torch.device(device_name)
     if args.device == "auto" and not torch.cuda.is_available():
         device = torch.device("cpu")
 
@@ -43,20 +68,35 @@ def main() -> None:
     model.summary()
 
     cache_dir = Path(config.data.tensor_cache_dir)
-    train_dataset = TinyStoriesDataset(str(cache_dir / "train.bin"), seq_len=int(config.data.chunk_size))
-    val_dataset = TinyStoriesDataset(str(cache_dir / "validation.bin"), seq_len=int(config.data.chunk_size))
+    seq_len = int(config.data.chunk_size)
+    train_dataset = TinyStoriesDataset(
+        str(cache_dir / "train.bin"),
+        seq_len=seq_len,
+    )
+    val_dataset = TinyStoriesDataset(
+        str(cache_dir / "validation.bin"),
+        seq_len=seq_len,
+    )
 
     if config.gpu.auto_tune_batch_size:
         BatchSizeAutoTuner(model, config, device).tune()
 
     train_loader = create_optimized_dataloader(
-        train_dataset, int(config.training.batch_size), shuffle=True, num_workers=int(config.data.num_workers)
+        train_dataset,
+        int(config.training.batch_size),
+        shuffle=True,
+        num_workers=int(config.data.num_workers),
+        prefetch_factor=int(config.data.get("prefetch_factor", 2)),
     )
     val_loader = create_optimized_dataloader(
-        val_dataset, int(config.training.batch_size), shuffle=False, num_workers=int(config.data.num_workers)
+        val_dataset,
+        int(config.training.batch_size),
+        shuffle=False,
+        num_workers=int(config.data.num_workers),
+        prefetch_factor=int(config.data.get("prefetch_factor", 2)),
     )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=float(config.training.learning_rate), betas=(0.9, 0.95))
+    optimizer = create_adamw(model, config, device)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
     resume_step = 0
     if args.resume:
@@ -64,8 +104,20 @@ def main() -> None:
         resume_step = int(ckpt.get("step", 0))
 
     model = setup_gpu_optimization(model, config, device)
-    log(f"Starting training on {device} with batch_size={config.training.batch_size}")
-    train(model, train_loader, val_loader, optimizer, device, config, resume_step=resume_step, scaler=scaler)
+    log(
+        f"Starting training on {device} "
+        f"with batch_size={config.training.batch_size}"
+    )
+    train(
+        model,
+        train_loader,
+        val_loader,
+        optimizer,
+        device,
+        config,
+        resume_step=resume_step,
+        scaler=scaler,
+    )
 
 
 if __name__ == "__main__":

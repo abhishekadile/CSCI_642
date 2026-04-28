@@ -58,6 +58,7 @@ def train(model, train_loader, val_loader, optimizer, device, config, resume_ste
     val_every = int(cfg_get(config, "training", "val_every_steps", 500))
     val_warmup = int(cfg_get(config, "training", "val_warmup_steps", 100))
     save_every = int(cfg_get(config, "training", "save_every_steps", 500))
+    log_every = max(1, int(cfg_get(config, "training", "log_every_steps", 10)))
     max_grad_norm = float(cfg_get(config, "training", "max_grad_norm", 1.0))
     empty_every = int(cfg_get(config, "gpu", "empty_cache_every_n_steps", 100))
     memory_every = int(cfg_get(config, "gpu", "memory_log_every_n_steps", 200))
@@ -97,20 +98,32 @@ def train(model, train_loader, val_loader, optimizer, device, config, resume_ste
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
 
-            train_loss = loss.item() * grad_accum
-            train_ppl = math.exp(min(train_loss, 20))
-            gpu_mem_mb = torch.cuda.memory_allocated() / 1024**2 if device.type == "cuda" else 0.0
             now_elapsed = time.time() - training_start
-            pbar.update(max(0.0, now_elapsed - last_elapsed))
+            delta = max(0.0, now_elapsed - last_elapsed)
+            remaining = max(0.0, time_limit - pbar.n)
+            pbar.update(min(delta, remaining))
             last_elapsed = now_elapsed
-            pbar.set_postfix(
-                {
-                    "loss": f"{train_loss:.3f}",
-                    "ppl": f"{train_ppl:.1f}",
-                    "lr": f"{current_lr:.2e}",
-                    "gpu_mb": f"{gpu_mem_mb:.0f}",
-                }
-            )
+
+            should_log = step % log_every == 0
+            train_loss = None
+            train_ppl = None
+            gpu_mem_mb = None
+            if should_log:
+                train_loss = loss.detach().item() * grad_accum
+                train_ppl = math.exp(min(train_loss, 20))
+                gpu_mem_mb = (
+                    torch.cuda.memory_allocated() / 1024**2
+                    if device.type == "cuda"
+                    else 0.0
+                )
+                pbar.set_postfix(
+                    {
+                        "loss": f"{train_loss:.3f}",
+                        "ppl": f"{train_ppl:.1f}",
+                        "lr": f"{current_lr:.2e}",
+                        "gpu_mb": f"{gpu_mem_mb:.0f}",
+                    }
+                )
 
             if step % memory_every == 0:
                 log_memory_snapshot(step)
@@ -132,11 +145,28 @@ def train(model, train_loader, val_loader, optimizer, device, config, resume_ste
             if step > 0 and step % save_every == 0:
                 checkpointing.save_latest(model, optimizer, scaler, step, val_loss, config)
 
-            append_csv_row(
-                "results/training_log.csv",
-                ["step", "train_loss", "train_ppl", "val_loss", "val_ppl", "lr", "gpu_mb"],
-                [step, train_loss, train_ppl, row_val_loss, row_val_ppl, current_lr, gpu_mem_mb],
-            )
+            if should_log or row_val_loss is not None:
+                append_csv_row(
+                    "results/training_log.csv",
+                    [
+                        "step",
+                        "train_loss",
+                        "train_ppl",
+                        "val_loss",
+                        "val_ppl",
+                        "lr",
+                        "gpu_mb",
+                    ],
+                    [
+                        step,
+                        train_loss,
+                        train_ppl,
+                        row_val_loss,
+                        row_val_ppl,
+                        current_lr,
+                        gpu_mem_mb,
+                    ],
+                )
             step += 1
     except KeyboardInterrupt:
         log("Interrupted. Saving latest checkpoint before exit.")

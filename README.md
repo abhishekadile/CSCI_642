@@ -41,34 +41,40 @@ This project trains a compact GPT-style Transformer on TinyStories and investiga
 git clone https://github.com/abhishekadile/CSCI_642.git
 cd CSCI_642
 
-# Create a virtual environment
-python -m venv venv
+# Install uv if needed
+python -m pip install uv
 
-# Activate it
+# Create and activate a local virtual environment
+uv venv .venv
+
 # Windows:
-venv\Scripts\activate
+.venv\Scripts\activate
 # Linux/Mac:
-source venv/bin/activate
+source .venv/bin/activate
 
-# Install dependencies
-pip install -r requirements.txt
+# Install CUDA PyTorch first, then the remaining dependencies
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+uv pip install -r requirements.txt
 
 # Preprocess the dataset (downloads TinyStories from HuggingFace, tokenizes, chunks)
 # This runs once and caches binary tensors to data/cache/
-python data/preprocess.py
+uv run python data/preprocess.py
 
 # Verify your GPU is visible
-python -c "import torch; print(torch.cuda.get_device_name(0))"
+uv run python -c "import torch; print(torch.cuda.get_device_name(0))"
 # Expected: NVIDIA GeForce RTX 2080
 ```
 
 **Optional: run a quick local training smoke test (5 minutes)**
 
 ```bash
-python scripts/train.py --time_limit 300 --device cuda
+uv run python scripts/train.py \
+  --config configs/local_rtx2080.yaml \
+  --time_limit 300 \
+  --device cuda
 ```
 
-This trains for 5 minutes and saves a checkpoint to `checkpoints/`. Good for verifying the setup before a full training run.
+This trains for 5 minutes with the RTX 2080 profile and saves a checkpoint to `checkpoints/`. Good for verifying GPU utilization before a full training run.
 
 ---
 
@@ -360,12 +366,15 @@ training:
   time_limit_seconds: 3600   # Wall-clock training budget (1 hour)
   val_every_steps: 500        # How often to compute validation perplexity
   grad_accumulation_steps: 4  # Effective batch = batch_size * grad_accumulation_steps
+  log_every_steps: 10         # Avoid synchronizing GPU every step for logging
 
 gpu:
   auto_tune_batch_size: false # Batch size is fixed at the tuned Colab value
+  use_fused_adamw: true
 
 data:
   num_workers: 2              # Colab-safe DataLoader worker count
+  prefetch_factor: 2
 
 inference:
   default_kv_mode: "full"     # full | sliding_window | none
@@ -373,6 +382,8 @@ inference:
   temperature: 0.8
   top_k: 50
 ```
+
+For local RTX 2080 experiments, use `configs/local_rtx2080.yaml`. It uses a fixed batch size of 30, 4 DataLoader workers, higher prefetching, fused AdamW, and disables `torch.compile` because Windows PyTorch Inductor requires a working Triton install.
 
 ---
 
@@ -383,6 +394,7 @@ CSCI_642/
 │
 ├── .cursorrules          ← Cursor codebase map and vibe-coding rules
 ├── configs/default.yaml  ← All hyperparameters (single source of truth)
+├── configs/local_rtx2080.yaml ← Local RTX 2080 training profile
 │
 ├── data/
 │   ├── tokenizer.py      ← TinyStoriesTokenizer wrapper around GPT-2 BPE

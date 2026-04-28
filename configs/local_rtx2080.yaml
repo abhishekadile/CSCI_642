@@ -26,14 +26,14 @@ gpu:
   auto_tune_batch_size: false
   empty_cache_every_n_steps: 100
   memory_log_every_n_steps: 200
-  use_torch_compile: true
+  use_torch_compile: false
   use_fused_adamw: true
 
 data:
   dataset_name: "roneneldan/TinyStories"
   chunk_size: 256
-  num_workers: 2
-  prefetch_factor: 2
+  num_workers: 4
+  prefetch_factor: 4
   tokenizer_cache_dir: "data/tokenizer"
   tensor_cache_dir: "data/cache"
   val_continuation_n_stories: 500

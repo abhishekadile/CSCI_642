@@ -16,7 +16,9 @@ def cfg_get(config: Any, section: str, key: str, default: Any = None) -> Any:
     if isinstance(config, dict):
         return config.get(section, {}).get(key, default)
     section_obj = getattr(config, section, None)
-    return getattr(section_obj, key, default) if section_obj is not None else default
+    if section_obj is None:
+        return default
+    return getattr(section_obj, key, default)
 
 
 def cfg_set(config: Any, section: str, key: str, value: Any) -> None:
@@ -28,9 +30,11 @@ def cfg_set(config: Any, section: str, key: str, value: Any) -> None:
 
 def setup_gpu_optimization(model, config, device):
     """
-    Apply GPU optimizations. Returns the optimized model, possibly torch.compile'd.
+    Apply GPU optimizations.
+    Returns the optimized model, possibly torch.compile'd.
     """
     if torch.cuda.is_available() and torch.device(device).type == "cuda":
+        torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
@@ -38,8 +42,8 @@ def setup_gpu_optimization(model, config, device):
     if cfg_get(config, "gpu", "use_torch_compile", True):
         try:
             model = torch.compile(model, mode="default")
-            log("torch.compile applied (reduce-overhead mode)")
-        except Exception as exc:
+            log("torch.compile applied (default mode)")
+        except Exception as exc:  # torch.compile can fail for backend-specific reasons.
             log(f"torch.compile not available: {exc}. Skipping.")
     return model
 
@@ -52,7 +56,14 @@ class BatchSizeAutoTuner:
         self.config = config
         self.device = torch.device(device)
         self.max_trials = max_trials
-        self.seq_len = int(cfg_get(config, "data", "chunk_size", cfg_get(config, "model", "max_seq_len", 256)))
+        self.seq_len = int(
+            cfg_get(
+                config,
+                "data",
+                "chunk_size",
+                cfg_get(config, "model", "max_seq_len", 256),
+            )
+        )
         self.vocab_size = int(cfg_get(config, "model", "vocab_size", 50257))
         self.upper = int(cfg_get(config, "training", "batch_size", 32))
 
@@ -62,8 +73,9 @@ class BatchSizeAutoTuner:
         try:
             torch.cuda.empty_cache()
             self.model.train()
-            x = torch.randint(0, self.vocab_size, (batch_size, self.seq_len), device=self.device)
-            y = torch.randint(0, self.vocab_size, (batch_size, self.seq_len), device=self.device)
+            shape = (batch_size, self.seq_len)
+            x = torch.randint(0, self.vocab_size, shape, device=self.device)
+            y = torch.randint(0, self.vocab_size, shape, device=self.device)
             out = self.model(x, targets=y)
             out["loss"].backward()
             self.model.zero_grad(set_to_none=True)
@@ -101,7 +113,13 @@ class BatchSizeAutoTuner:
         return best
 
 
-def create_optimized_dataloader(dataset, batch_size: int, shuffle: bool, num_workers: int = 4) -> DataLoader:
+def create_optimized_dataloader(
+    dataset,
+    batch_size: int,
+    shuffle: bool,
+    num_workers: int = 4,
+    prefetch_factor: int = 2,
+) -> DataLoader:
     kwargs = {
         "batch_size": batch_size,
         "shuffle": shuffle,
@@ -110,12 +128,15 @@ def create_optimized_dataloader(dataset, batch_size: int, shuffle: bool, num_wor
         "drop_last": True,
     }
     if num_workers > 0:
-        kwargs["prefetch_factor"] = 2
+        kwargs["prefetch_factor"] = prefetch_factor
         kwargs["persistent_workers"] = True
     return DataLoader(dataset, **kwargs)
 
 
-def log_memory_snapshot(step: int, csv_path: str = "results/memory_log.csv") -> None:
+def log_memory_snapshot(
+    step: int,
+    csv_path: str = "results/memory_log.csv",
+) -> None:
     if not torch.cuda.is_available():
         return
     path = Path(csv_path)
@@ -124,7 +145,9 @@ def log_memory_snapshot(step: int, csv_path: str = "results/memory_log.csv") -> 
     with path.open("a", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         if write_header:
-            writer.writerow(["step", "allocated_mb", "reserved_mb", "max_allocated_mb"])
+            writer.writerow(
+                ["step", "allocated_mb", "reserved_mb", "max_allocated_mb"]
+            )
         writer.writerow(
             [
                 step,
