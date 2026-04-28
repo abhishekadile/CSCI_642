@@ -1,0 +1,15 @@
+checkpoints/
+data/raw/
+data/cache/
+results/
+__pycache__/
+*.pt
+*.bin
+*.pth
+.env
+wandb/
+temp_hf/
+*.tmp
+.DS_Store
+Thumbs.db
+data/tokenizer/*.json

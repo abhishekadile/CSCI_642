@@ -1,0 +1,100 @@
+# tinystories-transformer - Cursor Rules
+
+## Codebase Map
+
+DATA FLOW (training):
+  data/tokenizer.py (TinyStoriesTokenizer)
+    -> data/preprocess.py (tokenize -> chunk -> save binary tensors)
+    -> data/dataset.py (TinyStoriesDataset, DataLoader)
+    -> training/trainer.py (AMP loop)
+    -> training/checkpointing.py (save best.pt + latest.pt -> GDrive sync)
+
+DATA FLOW (inference):
+  training/checkpointing.py (load_checkpoint)
+    -> model/transformer.py (GPTModel)
+    -> model/kv_cache.py (KVCache, mode: full/sliding_window/none)
+    -> inference/generate.py (autoregressive generation)
+    -> inference/chat.py (ChatSession, multi-turn history)
+
+MODEL INTERNALS:
+  model/transformer.py (GPTModel) contains TransformerBlock and RMSNorm
+  which calls model/attention.py (MultiHeadAttention, KV cache interface)
+  Normalization: model/transformer.py RMSNorm (not LayerNorm when enabled)
+
+EXPERIMENT PIPELINE:
+  scripts/run_experiments.py
+    -> evaluation/rq_experiments.py (run_rq1, run_rq2)
+    -> evaluation/metrics.py (perplexity, cache_hit_rate, pearson_r)
+    -> results/rq1_results.csv, results/rq2_results.csv
+
+ENTRY POINTS:
+  scripts/train.py              - local or Colab training
+  scripts/chat_terminal.py      - Windows terminal chat (CUDA RTX 2080)
+  scripts/run_experiments.py    - RQ1 + RQ2 experiment sweeps
+  notebooks/train_colab.ipynb   - full Colab walkthrough
+  notebooks/chat_colab.ipynb    - inference-only Colab notebook
+
+## Coding Rules
+
+1. CONFIG IS THE SINGLE SOURCE OF TRUTH
+   All hyperparameters live in configs/default.yaml loaded via OmegaConf.
+   Never hardcode learning rate, batch size, layer counts, or seq_len inside modules.
+   CLI flags override config values; never the reverse.
+
+2. DEVICE AGNOSTIC - ALWAYS
+   Never call .cuda() unconditionally. Always accept a device argument and
+   use tensor.to(device). Auto-detect with:
+     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+3. KV CACHE CONTRACT
+   Every attention module must accept (kv_cache: Optional[KVCache] = None, layer_idx: int = 0).
+   When cache is None: compute fresh. When cache is present: use kv_cache.update().
+   Never pass cache=None to the cache object - that's a different thing.
+
+4. AMP DISCIPLINE
+   autocast() wraps ONLY the forward pass.
+   scaler.scale(loss).backward() for the backward pass.
+   scaler.step(optimizer) + scaler.update() for the optimizer step.
+   Never wrap optimizer.step() inside autocast.
+
+5. CHECKPOINT SAFETY
+   Every checkpoint contains: model_state_dict, optimizer_state_dict,
+   scaler_state_dict, step, val_loss, config, timestamp.
+   Load all of them on resume - never just model weights.
+
+6. WINDOWS TERMINAL ENCODING
+   scripts/chat_terminal.py MUST call sys.stdout.reconfigure(encoding='utf-8')
+   before any other output. GPT-2 BPE produces Unicode that kills Windows terminals.
+
+7. VALIDATION WARM-UP
+   Do not evaluate val perplexity in the first 100 steps.
+   The model is random; the loss is meaningless and wastes time.
+
+8. TOKENIZER IS ALWAYS GPT-2 BPE
+   data/tokenizer.py TinyStoriesTokenizer - vocab_size=50257, EOS=50256.
+   The old CharTokenizer from the reference repo is NOT used anywhere in this project.
+
+9. NO GLOBAL STATE
+   Pass model, tokenizer, device, config explicitly into every function.
+   No module-level singletons.
+
+10. REPRODUCIBILITY
+    utils/seed.py set_seed(config.training.seed) is called at the top of
+    every entry point script before data loading or model init.
+
+## Where to Make Changes
+
+Change model size          -> configs/default.yaml model section
+Change KV window           -> configs/default.yaml inference.default_window_size
+                             or pass --window_size CLI arg to run_experiments.py
+Add a new experiment       -> evaluation/rq_experiments.py, wire into scripts/run_experiments.py
+Change LR schedule         -> training/trainer.py cosine_lr()
+Debug GPU OOM              -> training/gpu_optimizer.py BatchSizeAutoTuner + memory_log CSV
+Switch tokenizer backend   -> data/tokenizer.py TinyStoriesTokenizer.__init__() (tiktoken vs HF)
+Change evaluation prompts  -> evaluation/rq_experiments.py RQ1_PROMPTS list at top of file
+
+## Files That Should NOT Be Modified During Experiments
+  model/kv_cache.py          - interface is frozen; only window_size changes across experiments
+  training/checkpointing.py  - checkpoint format must stay stable across all runs
+  data/preprocess.py         - run once, cache to disk, never re-run mid-experiment
+  data/tokenizer.py          - tokenizer must not change between preprocess and training
