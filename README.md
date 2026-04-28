@@ -306,6 +306,8 @@ python scripts/run_experiments.py --checkpoint checkpoints/best.pt --skip_gpt4_e
 
 Results are saved to `results/rq1_results.csv` and `results/rq2_results.csv`.
 
+RQ1 latency and memory measurements were averaged across 50 generation runs using 5 story prompts repeated 10 times to control for prompt length variation.
+
 **RQ1 output example:**
 
 ```
