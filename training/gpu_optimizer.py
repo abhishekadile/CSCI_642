@@ -37,7 +37,7 @@ def setup_gpu_optimization(model, config, device):
 
     if cfg_get(config, "gpu", "use_torch_compile", True):
         try:
-            model = torch.compile(model, mode="reduce-overhead")
+            model = torch.compile(model, mode="default")
             log("torch.compile applied (reduce-overhead mode)")
         except Exception as exc:
             log(f"torch.compile not available: {exc}. Skipping.")
